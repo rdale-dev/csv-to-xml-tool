@@ -7,6 +7,90 @@ import re
 from datetime import datetime
 from config import MAX_FIELD_LENGTHS, MIN_COUNSELING_DATE
 
+def standardize_state_name(state):
+    """
+    Standardizes state codes to ensure they match the required format in XSD.
+    Converts state abbreviations to full state names and handles various formats.
+    
+    Args:
+        state: State name or code
+        
+    Returns:
+        Standardized state name
+    """
+    if not state or str(state).strip() == "" or str(state).lower() == "nan":
+        return ""  # Return empty string if state is empty
+    
+    state_str = str(state).strip()
+    
+    # State code to full name mapping
+    state_map = {
+        "AL": "Alabama",
+        "AK": "Alaska",
+        "AZ": "Arizona",
+        "AR": "Arkansas",
+        "CA": "California",
+        "CO": "Colorado",
+        "CT": "Connecticut",
+        "DE": "Delaware",
+        "FL": "Florida",
+        "GA": "Georgia",
+        "HI": "Hawaii",
+        "ID": "Idaho",
+        "IL": "Illinois",
+        "IN": "Indiana",
+        "IA": "Iowa",
+        "KS": "Kansas",
+        "KY": "Kentucky",
+        "LA": "Louisiana",
+        "ME": "Maine",
+        "MD": "Maryland",
+        "MA": "Massachusetts",
+        "MI": "Michigan",
+        "MN": "Minnesota",
+        "MS": "Mississippi",
+        "MO": "Missouri",
+        "MT": "Montana",
+        "NE": "Nebraska",
+        "NV": "Nevada",
+        "NH": "New Hampshire",
+        "NJ": "New Jersey",
+        "NM": "New Mexico",
+        "NY": "New York",
+        "NC": "North Carolina",
+        "ND": "North Dakota",
+        "OH": "Ohio",
+        "OK": "Oklahoma",
+        "OR": "Oregon",
+        "PA": "Pennsylvania",
+        "RI": "Rhode Island",
+        "SC": "South Carolina",
+        "SD": "South Dakota",
+        "TN": "Tennessee",
+        "TX": "Texas",
+        "UT": "Utah",
+        "VT": "Vermont",
+        "VA": "Virginia",
+        "WA": "Washington",
+        "WV": "West Virginia",
+        "WI": "Wisconsin",
+        "WY": "Wyoming",
+        "DC": "District of Columbia"
+    }
+    
+    # Case insensitive check for state codes
+    for code, name in state_map.items():
+        if state_str.upper() == code:
+            return name
+    
+    # Already a full state name or unrecognized value - do a case-insensitive check
+    for name in state_map.values():
+        if state_str.lower() == name.lower():
+            return name  # Return the proper case version
+    
+    # If we couldn't match it, return the original value
+    return state_str
+
 def standardize_country_code(country):
     """
     Standardizes country codes to ensure they match the required format in XSD.

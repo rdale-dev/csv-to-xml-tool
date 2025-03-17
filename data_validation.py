@@ -6,11 +6,36 @@ This module contains functions for validating data before XML conversion.
 from data_cleaning import (
     clean_phone_number, format_date, clean_whitespace, 
     validate_counseling_date, map_gender_to_sex, clean_numeric, 
-    clean_percentage, standardize_country_code
+    clean_percentage, standardize_country_code, standardize_state_name
 )
 from config import ValidationCategory as VC
 from logging_util import logger
 from validation_report import validator
+
+def validate_state_code(record_id, state_value):
+    """
+    Validates that the state value is a recognized state code or full state name.
+    
+    Args:
+        record_id: ID of the record
+        state_value: State value to validate
+        
+    Returns:
+        Standardized state name, or original value if not recognized
+    """
+    if not state_value:
+        return ""
+    
+    standardized_state = standardize_state_name(state_value)
+    
+    # If the state wasn't recognized as a valid state code/name and wasn't empty
+    if standardized_state != state_value and state_value and standardized_state:
+        validator.add_issue(
+            record_id, "info", VC.STANDARDIZED_VALUE, 
+            "State", f"Standardized state: '{state_value}' -> '{standardized_state}'"
+        )
+    
+    return standardized_state
 
 def validate_record(row, row_index, record_id):
     """
@@ -145,6 +170,9 @@ def validate_record(row, row_index, record_id):
             record_id, "info", VC.TRUNCATED_VALUE, 
             "Counselor Notes", f"Counselor notes truncated from {len(counselor_notes)} to 1000 characters"
         )
+    # Validate state code    
+    state_value = row.get('Mailing State/Province', '')
+    validate_state_code(record_id, state_value)    
     
     return record_valid
 

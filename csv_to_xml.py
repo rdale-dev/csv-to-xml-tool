@@ -12,7 +12,7 @@ from datetime import datetime
 from data_cleaning import (
     clean_phone_number, format_date, clean_whitespace, validate_counseling_date,
     map_gender_to_sex, split_multi_value, clean_numeric, clean_percentage,
-    truncate_counselor_notes, standardize_country_code
+    truncate_counselor_notes, standardize_country_code, standardize_state_name
 )
 from data_validation import (
     validate_record, analyze_csv_data
@@ -168,7 +168,9 @@ def build_client_request_section(counseling_record, row, record_id):
     create_element(address, 'Street1', row.get('Mailing Street', ''))
     create_element(address, 'Street2', '')
     create_element(address, 'City', row.get('Mailing City', ''))
-    create_element(address, 'State', row.get('Mailing State/Province', ''))
+    state_value = row.get('Mailing State/Province', '')
+    standardized_state = standardize_state_name(state_value)
+    create_element(address, 'State', standardized_state)
     create_element(address, 'ZipCode', row.get('Mailing Zip/Postal Code', ''))
     create_element(address, 'Zip4Code', '')
     
@@ -344,7 +346,9 @@ def build_counselor_record_section(counseling_record, row, record_id):
     create_element(address, 'Street1', row.get('Mailing Street', ''))
     create_element(address, 'Street2', '')
     create_element(address, 'City', row.get('Mailing City', ''))
-    create_element(address, 'State', row.get('Mailing State/Province', ''))
+    state_value = row.get('Mailing State/Province', '')
+    standardized_state = standardize_state_name(state_value)
+    create_element(address, 'State', standardized_state)
     create_element(address, 'ZipCode', row.get('Mailing Zip/Postal Code', ''))
     create_element(address, 'Zip4Code', '')
     

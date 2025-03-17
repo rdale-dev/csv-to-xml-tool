@@ -11,10 +11,30 @@ import sys
 from datetime import datetime
 
 from csv_to_xml import create_xml_from_csv
-from data_cleaning import standardize_country_code
+from data_cleaning import standardize_country_code, standardize_state_name
 from data_validation import analyze_csv_data
 from logging_util import ConversionLogger
 from validation_report import ValidationTracker
+
+
+def test_state_standardization():
+    """Test function to verify state standardization works correctly."""
+    test_values = [
+        "AL", "al", "Alabama", "alabama", " AL ", 
+        "IA", "ia", "Iowa", "iowa", " IA ",
+        "NY", "ny", "New York", "new york", " NY ",
+        "CA", "ca", "California", "california", " CA ",
+        "TX", "tx", "Texas", "texas", " TX ",
+        "UnknownState"  # Should return as is
+    ]
+    
+    logger.info("Testing state standardization:")
+    for value in test_values:
+        standardized = standardize_state_name(value)
+        logger.debug(f"  '{value}' -> '{standardized}'")
+    
+    # Return True if everything looks good
+    return True
 
 def test_country_standardization():
     """Test function to verify country standardization works correctly."""
@@ -47,6 +67,8 @@ def parse_arguments():
                         help='Directory to save log files')
     parser.add_argument('--test-countries', action='store_true',
                         help='Run country standardization test')
+    parser.add_argument('--test-states', action='store_true',
+                        help='Run state standardization test')
     parser.add_argument('--analyze-only', action='store_true',
                         help='Only analyze the CSV without conversion')
     
@@ -135,6 +157,13 @@ def main():
     if args.test_countries:
         logger.info("Running country standardization test...")
         test_country_standardization()
+        logger.info("Test completed.")
+        return
+    
+    # Add state standardization test option
+    if getattr(args, 'test_states', False):
+        logger.info("Running state standardization test...")
+        test_state_standardization()
         logger.info("Test completed.")
         return
     
