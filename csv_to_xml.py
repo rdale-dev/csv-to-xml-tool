@@ -143,6 +143,7 @@ def create_xml_from_csv(csv_file_path, xml_file_path, custom_logger=None, custom
 def build_client_request_section(counseling_record, row, record_id):
     """
     Builds the ClientRequest section of the XML.
+    Ensures elements are in the correct order according to the XSD schema.
     
     Args:
         counseling_record: The parent XML element
@@ -197,7 +198,7 @@ def build_client_request_section(counseling_record, row, record_id):
 def build_client_intake_section(counseling_record, row, record_id):
     """
     Builds the ClientIntake section of the XML.
-    
+    Ensures elements are in the correct order according to the XSD schema.
     Args:
         counseling_record: The parent XML element
         row: Dictionary of field values
@@ -240,7 +241,7 @@ def build_client_intake_section(counseling_record, row, record_id):
         for code in media_codes:
             create_element(media, 'Code', code)
         media_other = row.get('Internet (specify)', '')
-        if media_other:
+        if media_other: 
             create_element(media, 'Other', media_other)
     
     # Internet usage

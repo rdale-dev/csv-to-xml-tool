@@ -353,5 +353,5 @@ def truncate_counselor_notes(notes, max_length=MAX_FIELD_LENGTHS["CounselorNotes
     if last_space > 0:
         return cleaned_notes[:last_space]
     
-    # If all else fails, just truncate at max_length
+    # If all else fails just truncate at max_length
     return truncated
