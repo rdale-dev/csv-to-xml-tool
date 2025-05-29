@@ -25,24 +25,7 @@ from config import (
 # Import default logger and validator (will be overridden in create_xml_from_csv)
 from logging_util import logger
 from validation_report import validator
-
-
-def create_element(parent, element_name, element_text=None):
-    """
-    Helper function to create an XML element and add it to a parent element.
-    
-    Args:
-        parent: The parent XML element
-        element_name: Name of the new element
-        element_text: Optional text content for the new element
-        
-    Returns:
-        The newly created XML element
-    """
-    element = ET.SubElement(parent, element_name)
-    if element_text is not None:
-        element.text = str(element_text)
-    return element
+from xml_utils import create_element
 
 
 def create_xml_from_csv(csv_file_path, xml_file_path, custom_logger=None, custom_validator=None):

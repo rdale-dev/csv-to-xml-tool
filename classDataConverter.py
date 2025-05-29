@@ -15,9 +15,15 @@ import argparse
 import os
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+import logging # Keep standard logging import for levels like logging.INFO
+# Local logger configuration will be replaced by ConversionLogger
+# logger = logging.getLogger(__name__) # To be replaced
+
+from xml_utils import create_element, escape_xml
+from logging_util import ConversionLogger # Import ConversionLogger
+from data_cleaning import format_date as clean_format_date # Renamed to avoid confusion
+from data_cleaning import standardize_state_name, map_value
+import config # Import the entire config module
 
 def convert_csv_to_xml(csv_file_path, output_xml_path):
     """
@@ -53,196 +59,174 @@ def convert_csv_to_xml(csv_file_path, output_xml_path):
             first_record = group_df.iloc[0]
             
             # Create training record element
-            record = SubElement(root, 'ManagementTrainingRecord')
+            record = create_element(root, 'ManagementTrainingRecord')
             
             # Partner Training Number - Use Class/Event ID directly (will never be missing)
-            partner_training_number = SubElement(record, 'PartnerTrainingNumber')
-            event_id = str(first_record.get('Class/Event ID', ''))
-            partner_training_number.text = event_id
-            logger.info(f"Using Class/Event ID as PartnerTrainingNumber: {event_id}")
+            event_id_text = str(first_record.get('Class/Event ID', ''))
+            create_element(record, 'PartnerTrainingNumber', event_id_text)
+            logger.info(f"Using Class/Event ID as PartnerTrainingNumber: {event_id_text}")
             
             # Location - using the specified fixed value of 249003
-            location = SubElement(record, 'Location')
-            location_code = SubElement(location, 'LocationCode')
-            location_code.text = '249003'  # Fixed value as specified
+            location = create_element(record, 'Location')
+            create_element(location, 'LocationCode', config.DEFAULT_LOCATION_CODE)  # Use from config
             
             # Funding Source - always omit as requested
             fs_value = map_funding_source(first_record.get('Funding Source', ''))
             if fs_value:  # This will always be false now, but keeping the structure for future flexibility
-                funding_source = SubElement(record, 'FundingSource')
-                funding_source.text = fs_value
+                create_element(record, 'FundingSource', fs_value)
             
             # Date Training Started - from CSV if available
-            date_started = SubElement(record, 'DateTrainingStarted')
             date_val = first_record.get('Start Date', '')
-            date_started.text = format_date(date_val)
+            # Define formats for this specific call
+            date_formats_for_class_converter = ['%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%m-%d-%Y', '%m/%d/%y']
+            # Using a generic default like an empty string or a far past date might be better if the XSD allows optional.
+            # For now, sticking to the original '2023-12-12' default for this specific converter.
+            formatted_date = clean_format_date(date_val, input_formats=date_formats_for_class_converter, default_return='2023-12-12') 
+            create_element(record, 'DateTrainingStarted', formatted_date)
             
             # Number of Sessions - using specified default
-            sessions = SubElement(record, 'NumberOfSessions')
-            sessions.text = '1'  # As specified
+            create_element(record, 'NumberOfSessions', config.DEFAULT_TRAINING_SESSIONS)
             
             # Total Training Hours - using specified default
-            training_hours = SubElement(record, 'TotalTrainingHours')
-            training_hours.text = '1.5'  # As specified
+            create_element(record, 'TotalTrainingHours', config.DEFAULT_TRAINING_HOURS)
             
             # Training Title - from CSV
-            title = SubElement(record, 'TrainingTitle')
             title_val = first_record.get('Class/Event Name', '')
             if not title_val:
-                title_val = f"Training Event {event_id}"
-            title.text = escape_xml(title_val)
+                title_val = f"{config.DEFAULT_TRAINING_EVENT_TITLE_PREFIX}{event_id_text}" # Use prefix from config
+            create_element(record, 'TrainingTitle', escape_xml(title_val))
             
             # Training Location - from CSV or use default location
-            location_data = get_location_data(first_record)
-            training_location = SubElement(record, 'TrainingLocation')
+            location_data = get_location_data(first_record) # This function now uses config defaults
+            training_location = create_element(record, 'TrainingLocation')
             
-            if location_data['city']:
-                city = SubElement(training_location, 'City')
-                city.text = location_data['city']
+            if location_data['city']: # city comes from get_location_data, which uses config defaults
+                create_element(training_location, 'City', location_data['city'])
                 
-            if location_data['state']:
-                state = SubElement(training_location, 'State')
-                state.text = location_data['state']
+            if location_data['state']: # state comes from get_location_data, which uses config defaults
+                create_element(training_location, 'State', location_data['state'])
                 
-            if location_data['zip_code']:
-                zip_code = SubElement(training_location, 'ZipCode')
-                zip_code.text = location_data['zip_code']
+            if location_data['zip_code']: # zip_code comes from get_location_data, which uses config defaults
+                create_element(training_location, 'ZipCode', location_data['zip_code'])
                 
-            country = SubElement(training_location, 'Country')
-            code = SubElement(country, 'Code')
-            code.text = location_data['country']
+            country_element = create_element(training_location, 'Country')
+            create_element(country_element, 'Code', location_data['country']) # country from get_location_data
             
             # Calculate demographics from CSV data
             demographics = calculate_demographics(group_df)
             
             # Number Trained section - Total is always required
-            number_trained = SubElement(record, 'NumberTrained')
+            number_trained = create_element(record, 'NumberTrained')
             
-            total = SubElement(number_trained, 'Total')
-            total.text = str(demographics['total'])
+            create_element(number_trained, 'Total', str(demographics['total']))
             
             # Only include demographic fields if values are present
             if demographics['currently_in_business'] > 0:
-                currently_in_business = SubElement(number_trained, 'CurrentlyInBusiness')
-                currently_in_business.text = str(demographics['currently_in_business'])
+                create_element(number_trained, 'CurrentlyInBusiness', str(demographics['currently_in_business']))
             
             if demographics['not_in_business'] > 0:
-                not_in_business = SubElement(number_trained, 'NotYetInBusiness')
-                not_in_business.text = str(demographics['not_in_business'])
+                create_element(number_trained, 'NotYetInBusiness', str(demographics['not_in_business']))
             
             if demographics['disabilities'] > 0:
-                disabilities = SubElement(number_trained, 'PersonWithDisabilities')
-                disabilities.text = str(demographics['disabilities'])
+                create_element(number_trained, 'PersonWithDisabilities', str(demographics['disabilities']))
             
             if demographics['female'] > 0:
-                female = SubElement(number_trained, 'Female')
-                female.text = str(demographics['female'])
+                create_element(number_trained, 'Female', str(demographics['female']))
             
             if demographics['male'] > 0:
-                male = SubElement(number_trained, 'Male')
-                male.text = str(demographics['male'])
+                create_element(number_trained, 'Male', str(demographics['male']))
             
             if demographics['active_duty'] > 0:
-                active_duty = SubElement(number_trained, 'ActiveDuty')
-                active_duty.text = str(demographics['active_duty'])
+                create_element(number_trained, 'ActiveDuty', str(demographics['active_duty']))
             
             if demographics['veterans'] > 0:
-                veterans = SubElement(number_trained, 'Veterans')
-                veterans.text = str(demographics['veterans'])
+                create_element(number_trained, 'Veterans', str(demographics['veterans']))
             
             if demographics['service_disabled_veterans'] > 0:
-                service_disabled = SubElement(number_trained, 'ServiceDisabledVeterans')
-                service_disabled.text = str(demographics['service_disabled_veterans'])
+                create_element(number_trained, 'ServiceDisabledVeterans', str(demographics['service_disabled_veterans']))
             
             if demographics['reserve_guard'] > 0:
-                reserve = SubElement(number_trained, 'MemberOfReserveOrNationalGuard')
-                reserve.text = str(demographics['reserve_guard'])
+                create_element(number_trained, 'MemberOfReserveOrNationalGuard', str(demographics['reserve_guard']))
             
             if demographics['military_spouse'] > 0:
-                spouse = SubElement(number_trained, 'SpouseOfMilitaryMember')
-                spouse.text = str(demographics['military_spouse'])
+                create_element(number_trained, 'SpouseOfMilitaryMember', str(demographics['military_spouse']))
             
             # Race - only include if there's at least one race with data
             if any(value > 0 for value in demographics['race'].values()):
-                race = SubElement(number_trained, 'Race')
+                race_element = create_element(number_trained, 'Race')
                 
                 # Only include specific race elements if they have values
                 if demographics['race']['asian'] > 0:
-                    asian = SubElement(race, 'Asian')
-                    asian.text = str(demographics['race']['asian'])
+                    create_element(race_element, 'Asian', str(demographics['race']['asian']))
                 
                 if demographics['race']['black'] > 0:
-                    black = SubElement(race, 'BlackOrAfricanAmerican')
-                    black.text = str(demographics['race']['black'])
+                    create_element(race_element, 'BlackOrAfricanAmerican', str(demographics['race']['black']))
                 
                 if demographics['race']['native_american'] > 0:
-                    native = SubElement(race, 'NativeAmericanOrAlaskaNative')
-                    native.text = str(demographics['race']['native_american'])
+                    create_element(race_element, 'NativeAmericanOrAlaskaNative', str(demographics['race']['native_american']))
                 
                 if demographics['race']['pacific_islander'] > 0:
-                    pacific = SubElement(race, 'NativeHawaiianOrPacificIslander')
-                    pacific.text = str(demographics['race']['pacific_islander'])
+                    create_element(race_element, 'NativeHawaiianOrPacificIslander', str(demographics['race']['pacific_islander']))
                 
                 if demographics['race']['white'] > 0:
-                    white = SubElement(race, 'White')
-                    white.text = str(demographics['race']['white'])
+                    create_element(race_element, 'White', str(demographics['race']['white']))
                 
                 if demographics['race']['middle_eastern'] > 0:
-                    middle_eastern = SubElement(race, 'MiddleEastern')
-                    middle_eastern.text = str(demographics['race']['middle_eastern'])
+                    create_element(race_element, 'MiddleEastern', str(demographics['race']['middle_eastern']))
                 
                 if demographics['race']['north_african'] > 0:
-                    north_african = SubElement(race, 'NorthAfrican')
-                    north_african.text = str(demographics['race']['north_african'])
+                    create_element(race_element, 'NorthAfrican', str(demographics['race']['north_african']))
             
             # Ethnicity - only include if there's ethnicity data
             if any(value > 0 for value in demographics['ethnicity'].values()):
-                ethnicity = SubElement(number_trained, 'Ethnicity')
+                ethnicity_element = create_element(number_trained, 'Ethnicity')
                 
                 if demographics['ethnicity']['hispanic'] > 0:
-                    hispanic = SubElement(ethnicity, 'HispanicOrLatinoOrigin')
-                    hispanic.text = str(demographics['ethnicity']['hispanic'])
+                    create_element(ethnicity_element, 'HispanicOrLatinoOrigin', str(demographics['ethnicity']['hispanic']))
                 
                 if demographics['ethnicity']['non_hispanic'] > 0:
-                    non_hispanic = SubElement(ethnicity, 'NonHispanicOrLatinoOrigin')
-                    non_hispanic.text = str(demographics['ethnicity']['non_hispanic'])
+                    create_element(ethnicity_element, 'NonHispanicOrLatinoOrigin', str(demographics['ethnicity']['non_hispanic']))
             
             # Number Minorities Trained - only include if there are minorities
             if demographics['minorities'] > 0:
-                minorities = SubElement(record, 'NumberUnderservedTrained')
-                minorities_total = SubElement(minorities, 'Total')
-                minorities_total.text = str(demographics['minorities'])
+                minorities_element = create_element(record, 'NumberUnderservedTrained')
+                create_element(minorities_element, 'Total', str(demographics['minorities']))
             
             # Training Topic - from CSV
-            training_topic = SubElement(record, 'TrainingTopic')
-            topic_code = SubElement(training_topic, 'Code')
+            training_topic_element = create_element(record, 'TrainingTopic')
             topic_val = first_record.get('Training Topic', '')
-            topic_code.text = map_training_topic(topic_val)
+            # Use mappings and default from config
+            mapped_topic = map_value(topic_val, config.TRAINING_TOPIC_MAPPINGS, default_value=config.DEFAULT_TRAINING_TOPIC, case_sensitive=False)
+            # Note: The original classDataConverter.map_training_topic had more complex logic
+            # for partial matches against VALID_TRAINING_TOPICS. map_value with TRAINING_TOPIC_MAPPINGS
+            # primarily handles direct key matches (case-insensitive). If a key isn't in
+            # TRAINING_TOPIC_MAPPINGS, it gets DEFAULT_TRAINING_TOPIC.
+            # This simplification aligns with using the generic map_value.
+            # If the more complex logic (like keyword search in VALID_TRAINING_TOPICS) is strictly needed,
+            # map_value might need to be enhanced, or a more specific mapping function retained/re-introduced.
+            create_element(training_topic_element, 'Code', mapped_topic)
             
             # Training Partners - always Women's Business Center
-            partners = SubElement(record, 'TrainingPartners')
+            partners_element = create_element(record, 'TrainingPartners')
             
             # Add Women's Business Center as partner
-            partner_code = SubElement(partners, 'Code')
-            partner_code.text = 'Women\'s Business Center'
+            create_element(partners_element, 'Code', config.DEFAULT_TRAINING_PARTNER_CODE)
             
             # Program Format Type - directly from 'Class/Event Type' column
-            format_type = SubElement(record, 'ProgramFormatType')
             format_val = first_record.get('Class/Event Type', '')
-            format_type.text = map_program_format(format_val)
-            logger.info(f"Using Program Format Type: {map_program_format(format_val)} from value: {format_val}")
+            # Use mappings and default from config
+            program_format_text = map_value(format_val, config.PROGRAM_FORMAT_MAPPINGS, default_value=config.DEFAULT_PROGRAM_FORMAT, case_sensitive=False)
+            create_element(record, 'ProgramFormatType', program_format_text)
+            logger.info(f"Using Program Format Type: {program_format_text} from value: {format_val}")
             
             # Dollar Amount of Fees - always 0 or omit
-            # We'll just set it to 0
-            fees = SubElement(record, 'DollarAmountOfFees')
-            fees.text = '0'
+            create_element(record, 'DollarAmountOfFees', config.DEFAULT_TRAINING_FEES)
             
             # Language - include English by default
-            language = SubElement(record, 'Language')
+            language_element = create_element(record, 'Language')
             
             # Add default English language
-            lang_code = SubElement(language, 'Code')
-            lang_code.text = 'English'
+            create_element(language_element, 'Code', config.DEFAULT_LANGUAGE) # Use from config
             
             # Sponsor Name and Cosponsor Name - leave blank
             # SponsorName is completely omitted as requested
@@ -250,8 +234,7 @@ def convert_csv_to_xml(csv_file_path, output_xml_path):
             # Only include CosponsorName if explicitly found in CSV
             cosponsor_name = extract_cosponsor_name(first_record)
             if cosponsor_name and cosponsor_name.strip() and cosponsor_name.lower() != 'n/a':
-                cosponsor = SubElement(record, 'CosponsorsName')
-                cosponsor.text = cosponsor_name
+                create_element(record, 'CosponsorsName', cosponsor_name)
         
         # Convert to formatted XML string
         rough_string = tostring(root, 'utf-8')
@@ -271,36 +254,7 @@ def convert_csv_to_xml(csv_file_path, output_xml_path):
         logger.error(f"Error converting CSV to XML: {str(e)}", exc_info=True)
         raise
 
-def escape_xml(text):
-    """Escape XML special characters"""
-    if text is None:
-        return ''
-    
-    return (str(text)
-        .replace('&', '&amp;')
-        .replace('<', '&lt;')
-        .replace('>', '&gt;')
-        .replace('"', '&quot;')
-        .replace("'", '&apos;'))
-
-def format_date(date_str):
-    """Format date string to YYYY-MM-DD"""
-    if not date_str or pd.isna(date_str):
-        return '2023-12-12'  # Default date
-    
-    try:
-        # Try different date formats
-        for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%m-%d-%Y', '%m/%d/%y']:
-            try:
-                date_obj = datetime.strptime(str(date_str), fmt)
-                return date_obj.strftime('%Y-%m-%d')
-            except ValueError:
-                continue
-        
-        # If no format works, return default
-        return '2023-12-12'
-    except Exception:
-        return '2023-12-12'
+# Removed local format_date, will use data_cleaning.format_date
 
 def get_location_data(record):
     """Extract location information from a record"""
@@ -317,18 +271,18 @@ def get_location_data(record):
             if field in ['Address', 'Street Line 1'] and ',' in city_val:
                 parts = city_val.split(',')
                 if len(parts) > 1:
-                    city = parts[1].strip()
+                    city = escape_xml(parts[1].strip()) # Apply escaping
                     location_found = True
                     break
             else:
-                city = city_val
+                city = escape_xml(city_val) # Apply escaping
                 location_found = True
                 break
     
     # Try to get state
     for field in ['State/Province', 'State', 'state']:
         if field in record and not pd.isna(record[field]):
-            state = str(record[field])
+            state = escape_xml(str(record[field])) # Apply escaping
             if state:
                 location_found = True
             break
@@ -340,27 +294,30 @@ def get_location_data(record):
             # Extract first 5 digits
             zip_match = re.search(r'\d{5}', zip_val)
             if zip_match:
-                zip_code = zip_match.group(0)
+                zip_code = escape_xml(zip_match.group(0)) # Apply escaping
                 location_found = True
                 break
     
     # If we couldn't determine a clear location, use the specified default
     if not location_found or not (city and state and zip_code):
-        # Use specified defaults
-        city = "Des Moines"
-        state = "Iowa"
-        zip_code = "50312"
-        logger.info("Using default location: Des Moines, Iowa 50312")
-    else:
-        # If we have a state value, map it to the proper format
-        if state:
-            state = map_state(state)
+        # Use specified defaults from config
+        city = config.DEFAULT_TRAINING_LOCATION_CITY
+        state = config.DEFAULT_TRAINING_LOCATION_STATE
+        zip_code = config.DEFAULT_TRAINING_LOCATION_ZIP
+        logger.info(f"Using default location: {city}, {state} {zip_code}")
+    
+    # Standardize the state name using the new function.
+    # If state was defaulted above, it will be standardized (e.g. "Iowa" -> "Iowa").
+    # If state came from CSV, it will be standardized.
+    # If standardization fails (e.g. invalid state from CSV and no default triggered above),
+    # it defaults to config.DEFAULT_TRAINING_LOCATION_STATE.
+    state = standardize_state_name(state, default_return=config.DEFAULT_TRAINING_LOCATION_STATE)
     
     return {
-        'city': city,
-        'state': state,
-        'zip_code': zip_code,
-        'country': 'United States'
+        'city': city, 
+        'state': state, 
+        'zip_code': zip_code, 
+        'country': config.DEFAULT_TRAINING_LOCATION_COUNTRY # Use from config
     }
 
 def calculate_demographics(df):
@@ -506,296 +463,10 @@ def calculate_demographics(df):
         'minorities': minorities
     }
 
-def map_funding_source(source):
-    """Map funding source to valid XSD enumeration value"""
-    # Always return blank for funding source as requested
-    return ''
-
-def map_training_topic(topic):
-    """Map training topic to valid XSD enumeration value"""
-    if not topic or pd.isna(topic):
-        return 'Technology'
-    
-    # Convert to string for comparison
-    topic = str(topic).strip()
-    
-    # Valid topics from XSD
-    valid_topics = [
-        "Business Accounting/Budget",
-        "Business Financial/Cash Flow",
-        "Business Financing/Capital Sources",
-        "Business Operations/Management",
-        "Business Plan",
-        "Business Start-up/Preplanning",
-        "Buy/Sell Business",
-        "Credit Counseling",
-        "Customer Relations",
-        "Cyber Security/Cyber Awareness",
-        "Disaster Planning/Recovery",
-        "eCommerce",
-        "Franchising",
-        "Government Contracting",
-        "Human Resources/Managing Employees",
-        "Intellectual Property Training",
-        "International Trade",
-        "Legal Issues",
-        "Marketing/Sales",
-        "Tax Planning",
-        "Technology",
-        "Other"
-    ]
-    
-    # Mapping dictionary for common terms
-    topic_mappings = {
-        'Technology': 'Technology',
-        'Tech': 'Technology',
-        'IT': 'Technology',
-        'Computer': 'Technology',
-        'Software': 'Technology',
-        'Marketing': 'Marketing/Sales',
-        'Sales': 'Marketing/Sales',
-        'Advertising': 'Marketing/Sales',
-        'Start-up': 'Business Start-up/Preplanning',
-        'Startup': 'Business Start-up/Preplanning',
-        'Starting a Business': 'Business Start-up/Preplanning',
-        'Business Plan': 'Business Plan',
-        'Planning': 'Business Plan',
-        'Financing': 'Business Financing/Capital Sources',
-        'Capital': 'Business Financing/Capital Sources',
-        'Funding': 'Business Financing/Capital Sources',
-        'International': 'International Trade',
-        'Global': 'International Trade',
-        'Export': 'International Trade',
-        'eCommerce': 'eCommerce',
-        'E-Commerce': 'eCommerce',
-        'Online Business': 'eCommerce',
-        'Legal': 'Legal Issues',
-        'Law': 'Legal Issues',
-        'Compliance': 'Legal Issues',
-        'Tax': 'Tax Planning',
-        'Taxes': 'Tax Planning',
-        'Contracting': 'Government Contracting',
-        'Government': 'Government Contracting',
-        'Federal': 'Government Contracting',
-        'Cyber': 'Cyber Security/Cyber Awareness',
-        'Security': 'Cyber Security/Cyber Awareness',
-        'HR': 'Human Resources/Managing Employees',
-        'Human Resources': 'Human Resources/Managing Employees',
-        'Employee': 'Human Resources/Managing Employees',
-        'Accounting': 'Business Accounting/Budget',
-        'Budget': 'Business Accounting/Budget',
-        'Finance': 'Business Accounting/Budget',
-        'Cash Flow': 'Business Financial/Cash Flow',
-        'Financial': 'Business Financial/Cash Flow',
-        'Customer': 'Customer Relations',
-        'Service': 'Customer Relations',
-        'Disaster': 'Disaster Planning/Recovery',
-        'Recovery': 'Disaster Planning/Recovery',
-        'Emergency': 'Disaster Planning/Recovery',
-        'Buy/Sell': 'Buy/Sell Business',
-        'Acquisition': 'Buy/Sell Business',
-        'Merger': 'Buy/Sell Business',
-        'Franchise': 'Franchising',
-        'IP': 'Intellectual Property Training',
-        'Patent': 'Intellectual Property Training',
-        'Trademark': 'Intellectual Property Training',
-        'Credit': 'Credit Counseling',
-        'Loan': 'Credit Counseling',
-        'Operations': 'Business Operations/Management',
-        'Management': 'Business Operations/Management'
-    }
-    
-    # Try direct mapping
-    if topic in valid_topics:
-        return topic
-    
-    # Check for partial matches with mapping dictionary
-    for key, value in topic_mappings.items():
-        if key.lower() in topic.lower():
-            return value
-    
-    # If no match, check for any keywords in the valid topics
-    for valid_topic in valid_topics:
-        words = valid_topic.replace('/', ' ').split()
-        for word in words:
-            if word.lower() in topic.lower() and len(word) > 3:  # Only match on significant words
-                return valid_topic
-    
-    # Default to Technology if no match
-    return 'Technology'
-
-def map_program_format(format_type):
-    """Map program format to valid XSD enumeration value"""
-    if not format_type or pd.isna(format_type):
-        return 'In-person'
-    
-    # Convert to string for comparison
-    format_type = str(format_type).strip()
-    
-    # Valid format types from XSD
-    valid_formats = [
-        "Hybrid",
-        "In-person",
-        "On Demand",
-        "Online"
-    ]
-    
-    # Mapping dictionary - prioritize exact matches from the CSV
-    format_mappings = {
-        # Valid XSD values
-        'Hybrid': 'Hybrid',
-        'In-person': 'In-person',
-        'On Demand': 'On Demand',
-        'Online': 'Online',
-        
-        # Additional specified mappings
-        'Seminar': 'In-person',
-        'Course': 'In-person',
-        'Teleconference': 'Online',
-        'On-line Course': 'Online',
-        
-        # Other common variations
-        'In person': 'In-person',
-        'Webinar': 'Online',
-        'Virtual': 'Online',
-        'Remote': 'Online',
-        'Zoom': 'Online',
-        'Teams': 'Online',
-        'Face-to-face': 'In-person',
-        'F2F': 'In-person',
-        'Classroom': 'In-person',
-        'Blended': 'Hybrid',
-        'On-Demand': 'On Demand',
-        'Self-paced': 'On Demand',
-        'Recording': 'On Demand'
-    }
-    
-    # Try direct mapping
-    if format_type in valid_formats:
-        return format_type
-    
-    # Try mapping from our dictionary
-    if format_type in format_mappings:
-        mapped_value = format_mappings[format_type]
-        logger.info(f"Mapped program format '{format_type}' to '{mapped_value}'")
-        return mapped_value
-    
-    # Check for partial matches
-    for key, value in format_mappings.items():
-        if key.lower() in format_type.lower():
-            logger.info(f"Partial match: Mapped program format '{format_type}' to '{value}' via '{key}'")
-            return value
-    
-    # Log when we can't find a match
-    logger.warning(f"Could not map program format: '{format_type}', defaulting to 'In-person'")
-    
-    # Default to In-person
-    return 'In-person'
-
-def map_state(state):
-    """Map state code to full state name as per XSD"""
-    if not state or pd.isna(state):
-        return 'Alabama'
-    
-    # Convert to string and clean
-    state = str(state).strip()
-    
-    # Map state codes to full names
-    state_mappings = {
-        'AL': 'Alabama',
-        'AK': 'Alaska',
-        'AZ': 'Arizona',
-        'AR': 'Arkansas',
-        'CA': 'California',
-        'CO': 'Colorado',
-        'CT': 'Connecticut',
-        'DE': 'Delaware',
-        'FL': 'Florida',
-        'GA': 'Georgia',
-        'HI': 'Hawaii',
-        'ID': 'Idaho',
-        'IL': 'Illinois',
-        'IN': 'Indiana',
-        'IA': 'Iowa',
-        'KS': 'Kansas',
-        'KY': 'Kentucky',
-        'LA': 'Louisiana',
-        'ME': 'Maine',
-        'MD': 'Maryland',
-        'MA': 'Massachusetts',
-        'MI': 'Michigan',
-        'MN': 'Minnesota',
-        'MS': 'Mississippi',
-        'MO': 'Missouri',
-        'MT': 'Montana',
-        'NE': 'Nebraska',
-        'NV': 'Nevada',
-        'NH': 'New Hampshire',
-        'NJ': 'New Jersey',
-        'NM': 'New Mexico',
-        'NY': 'New York',
-        'NC': 'North Carolina',
-        'ND': 'North Dakota',
-        'OH': 'Ohio',
-        'OK': 'Oklahoma',
-        'OR': 'Oregon',
-        'PA': 'Pennsylvania',
-        'RI': 'Rhode Island',
-        'SC': 'South Carolina',
-        'SD': 'South Dakota',
-        'TN': 'Tennessee',
-        'TX': 'Texas',
-        'UT': 'Utah',
-        'VT': 'Vermont',
-        'VA': 'Virginia',
-        'WA': 'Washington',
-        'WV': 'West Virginia',
-        'WI': 'Wisconsin',
-        'WY': 'Wyoming',
-        'DC': 'District of Columbia',
-        'AS': 'American Samoa',
-        'GU': 'Guam',
-        'MP': 'Northern Mariana Islands',
-        'PR': 'Puerto Rico',
-        'VI': 'U.S. Virgin Islands'
-    }
-    
-    # Valid state names from XSD
-    valid_states = set([
-        "Alabama", "Alaska", "American Samoa", "Arizona", "Arkansas",
-        "Armed Forces Europe", "Armed Forces Pacific", "Armed Forces the Americas",
-        "California", "Colorado", "Connecticut", "Delaware", "District of Columbia",
-        "Federated States of Micronesia", "Florida", "Georgia", "Guam", "Hawaii",
-        "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana",
-        "Maine", "Marshall Islands", "Maryland", "Massachusetts", "Michigan",
-        "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada",
-        "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina",
-        "North Dakota", "Northern Mariana Islands", "Ohio", "Oklahoma", "Oregon",
-        "Pennsylvania", "Puerto Rico", "Republic of Palau", "Rhode Island",
-        "South Carolina", "South Dakota", "Tennessee", "Texas",
-        "United States Minor Outlying Islands", "U.S. Virgin Islands", "Utah",
-        "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"
-    ])
-    
-    # If it's a 2-letter code, return full name
-    if state.upper() in state_mappings:
-        return state_mappings[state.upper()]
-    
-    # If it's already a full state name in the valid list, return it
-    if state in valid_states:
-        return state
-    
-    # Check for close matches
-    for valid_state in valid_states:
-        if state.lower() in valid_state.lower():
-            return valid_state
-    
-    # If no match, check if it's a known abbreviation in a different format
-    if state.upper() in state_mappings:
-        return state_mappings[state.upper()]
-    
-    # Default to Iowa if no match
-    return 'Iowa'
+# map_funding_source was removed and its logic inlined.
+# map_training_topic was removed and replaced by map_value.
+# map_program_format was removed and replaced by map_value.
+# map_state was removed and its logic merged into data_cleaning.standardize_state_name.
 
 def extract_cosponsor_name(record):
     """Extract cosponsor name from a record"""
@@ -807,7 +478,7 @@ def extract_cosponsor_name(record):
         if field in record and not pd.isna(record[field]):
             cosponsor_val = str(record[field])
             if cosponsor_val:
-                cosponsor = cosponsor_val
+                cosponsor = escape_xml(cosponsor_val) # Apply escaping
                 break
     
     return cosponsor
@@ -817,12 +488,18 @@ if __name__ == "__main__":
     parser.add_argument('input_csv', help='Path to the input CSV file')
     parser.add_argument('output_xml', help='Path for the output XML file')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
-    
+    parser.add_argument('--log-file', help='Optional path to save log output to a file.')
+
     args = parser.parse_args()
     
-    # Set log level based on verbose flag
-    if args.verbose:
-        logger.setLevel(logging.DEBUG)
+    # Setup logger using ConversionLogger
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logger = ConversionLogger(
+        logger_name="ClassDataConverter",
+        log_level=log_level,
+        log_to_file=bool(args.log_file), # True if a path is provided
+        log_file_path=args.log_file if args.log_file else None
+    ).logger # Get the actual logger instance
     
     # Check if input file exists
     if not os.path.isfile(args.input_csv):

@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 import os
 from datetime import datetime
 import argparse
-import logging
+import logging # Keep standard logging import for levels like logging.INFO
 
 # Import data cleaning functions from existing module
 from data_cleaning import (
@@ -69,15 +69,7 @@ def get_value_with_default(row, field_name, default_value):
     return value
 
 # ================ XML GENERATION FUNCTIONS ================
-
-def create_element(parent, element_name, element_text=None):
-    """
-    Helper function to create an XML element and add it to a parent element.
-    """
-    element = ET.SubElement(parent, element_name)
-    if element_text is not None and element_text != "":
-        element.text = str(element_text)
-    return element
+from xml_utils import create_element
 
 def build_client_request_section(counseling_record, row, record_id, logger):
     """
@@ -359,11 +351,7 @@ def create_training_xml_from_csv(csv_file_path, xml_file_path, training_hours=DE
         training_hours: Default training hours to assign if not in CSV
         logger: Optional logger instance
     """
-    # Create default logger if none provided
-    if logger is None:
-        logging.basicConfig(level=logging.INFO, 
-                           format='%(levelname)s: %(message)s')
-        logger = logging.getLogger("training_xml")
+    # Logger will be passed in from main()
     
     # Open and read the CSV file
     try:
@@ -438,10 +426,16 @@ def main():
     
     args = parser.parse_args()
     
-    # Set up logging
-    logging.basicConfig(level=getattr(logging, args.log_level),
-                      format='%(levelname)s: %(message)s')
-    logger = logging.getLogger("training_xml")
+    # Setup logger using ConversionLogger
+    from logging_util import ConversionLogger
+    log_level_val = getattr(logging, args.log_level.upper(), logging.INFO)
+    # For this script, file logging is not explicitly configured via CLI.
+    # Defaulting log_to_file=False for now, or add a --log-file arg if needed.
+    logger = ConversionLogger(
+        logger_name="TrainingClientXML",
+        log_level=log_level_val,
+        log_to_file=False 
+    ).logger # Get the actual logger instance
     
     # Determine output file path if not specified
     if not args.output:
