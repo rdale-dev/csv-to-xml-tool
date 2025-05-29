@@ -144,8 +144,15 @@ def main():
     args = parse_arguments()
     
     # Initialize logging
-    log_level = getattr(logging, args.log_level)
-    logger = ConversionLogger(log_level=log_level, log_dir=args.log_dir)
+    log_level_val = getattr(logging, args.log_level.upper(), logging.INFO)
+    # Use log_dir for timestamped files, log_to_file is True by default
+    logger = ConversionLogger(
+        logger_name="CSVtoXMLConverter",
+        log_level=log_level_val,
+        log_dir=args.log_dir, # For timestamped logs if no specific path
+        # log_file_path=None, # Not explicitly set by main.py CLI args for a single file
+        log_to_file=True # main.py implies file logging is generally desired
+    ).logger # Get the actual logger instance
     
     # Initialize validation tracker
     validator = ValidationTracker()

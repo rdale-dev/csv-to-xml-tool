@@ -10,242 +10,27 @@ import os
 import sys
 import xml.etree.ElementTree as ET
 import argparse
-import logging
+import logging # Keep standard logging import for levels like logging.INFO
 from datetime import datetime
 
-def setup_logging(log_level=logging.INFO, log_to_file=False):
-    """Set up logging configuration."""
-    handlers = [logging.StreamHandler()]
-    
-    if log_to_file:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = f"sba_xml_fixer_{timestamp}.log"
-        handlers.append(logging.FileHandler(log_file))
-    
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=handlers
-    )
-    return logging.getLogger(__name__)
+# Local setup_logging will be removed.
+# from logging_util import logger # Default instance not used here.
+from logging_util import ConversionLogger # Import ConversionLogger
 
-def fix_client_intake_section(xml_file, output_file=None, backup=True):
-    """
-    Fix the order of elements in the ClientIntake section of SBA counseling XML files.
-    
-    Args:
-        xml_file: Path to the XML file to fix
-        output_file: Path to save the fixed XML (default: overwrite original)
-        backup: Whether to create a backup of the original file
-        
-    Returns:
-        Path to the fixed XML file
-    """
-    logger = logging.getLogger(__name__)
-    
-    if output_file is None:
-        output_file = xml_file
-    
-    # Create backup if requested
-    if backup and output_file == xml_file:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = f"{xml_file}.{timestamp}.bak"
-        try:
-            import shutil
-            shutil.copy2(xml_file, backup_file)
-            logger.info(f"Created backup at {backup_file}")
-        except Exception as e:
-            logger.warning(f"Could not create backup: {str(e)}")
-    
-    try:
-        # Parse the XML file
-        tree = ET.parse(xml_file)
-        root = tree.getroot()
-        
-        # Define the correct order of elements in ClientIntake based on XSD schema
-        client_intake_order = [
-            'Race', 'Ethnicity', 'Sex', 'Disability', 'MilitaryStatus', 
-            'BranchOfService', 'Media', 'Internet', 'CurrentlyInBusiness', 
-            'CurrentlyExporting', 'CompanyName', 'BusinessType', 
-            'BusinessOwnership', 'ConductingBusinessOnline', 
-            'ClientIntake_Certified8a', 'Employee_Owned', 'TotalNumberOfEmployees',
-            'NumberOfEmployeesInExportingBusiness', 'ClientAnnualIncomePart2',
-            'LegalEntity', 'Rural_vs_Urban', 'FIPS_Code', 'CounselingSeeking',
-            'ExportCountries'
-        ]
-        
-        # Track how many records were fixed
-        fixed_count = 0
-        records_count = 0
-        
-        # Process each CounselingRecord
-        for counseling_record in root.findall('CounselingRecord'):
-            records_count += 1
-            client_intake = counseling_record.find('ClientIntake')
-            
-            if client_intake is not None:
-                # Find any ordering issues before fixing
-                has_issues = check_element_order(client_intake, client_intake_order)
-                
-                # Reorder elements in ClientIntake
-                reorder_elements(client_intake, client_intake_order)
-                
-                if has_issues:
-                    fixed_count += 1
-        
-        # Save the fixed XML
-        tree.write(output_file, encoding='utf-8', xml_declaration=True)
-        logger.info(f"Fixed {fixed_count} out of {records_count} counseling records")
-        logger.info(f"Saved fixed XML to {output_file}")
-        
-        return output_file
-    
-    except Exception as e:
-        logger.error(f"Error fixing XML file: {str(e)}")
-        return None
+# Import necessary functions from xml_validator
+# Note: If xml_validator.py is in the same directory or PYTHONPATH, this should work.
+# Otherwise, sys.path manipulations might be needed, or a proper package structure.
+try:
+    from xml_validator import fix_client_intake_element_order as validator_fix_order
+    from xml_validator import process_directory as validator_process_directory
+    from xml_validator import validate_against_xsd 
+except ImportError:
+    # Fallback or error handling if xml_validator is not found directly
+    # This might happen if they are not in the same directory and PYTHONPATH isn't set up.
+    # For this tool's context, we assume they are accessible.
+    print("Error: Could not import from xml_validator. Ensure it's in the Python path.")
+    sys.exit(1)
 
-def check_element_order(parent, element_order):
-    """
-    Check if elements are in the correct order.
-    
-    Args:
-        parent: Parent element
-        element_order: List of element names in the correct order
-        
-    Returns:
-        Boolean indicating if there are ordering issues
-    """
-    # Get tags of child elements
-    child_tags = [child.tag for child in parent]
-    
-    # Find elements from order list that exist in the XML
-    expected_order = [tag for tag in element_order if tag in child_tags]
-    
-    # Check if the actual order matches the expected order
-    last_index = -1
-    for tag in expected_order:
-        index = child_tags.index(tag)
-        if index < last_index:
-            return True  # Order issue found
-        last_index = index
-    
-    return False  # No order issues
-
-def reorder_elements(parent, element_order):
-    """
-    Reorder child elements according to the specified order.
-    
-    Args:
-        parent: Parent element
-        element_order: List of element names in the correct order
-    """
-    # Create a dictionary to store elements by tag name
-    elements = {}
-    for child in list(parent):
-        tag = child.tag
-        if tag in elements:
-            # If we already have this tag, it's a list of elements
-            if isinstance(elements[tag], list):
-                elements[tag].append(child)
-            else:
-                elements[tag] = [elements[tag], child]
-        else:
-            elements[tag] = child
-        
-        # Remove the child from the parent
-        parent.remove(child)
-    
-    # Add elements back in the correct order
-    for tag in element_order:
-        if tag in elements:
-            if isinstance(elements[tag], list):
-                # Add all elements with this tag
-                for element in elements[tag]:
-                    parent.append(element)
-            else:
-                # Add the single element
-                parent.append(elements[tag])
-    
-    # Add any remaining elements that weren't in the order list
-    for tag, element in elements.items():
-        if tag not in element_order:
-            if isinstance(element, list):
-                for item in element:
-                    parent.append(item)
-            else:
-                parent.append(element)
-
-def add_missing_required_elements(client_intake, record_id):
-    """
-    Add any missing required elements to ClientIntake.
-    
-    Args:
-        client_intake: ClientIntake element
-        record_id: ID of the counseling record
-    """
-    logger = logging.getLogger(__name__)
-    
-    # Define required elements and their default values
-    required_elements = {
-        'CurrentlyInBusiness': 'No',
-    }
-    
-    # Check and add missing elements
-    for tag, default_value in required_elements.items():
-        if client_intake.find(tag) is None:
-            logger.info(f"Record {record_id}: Adding missing required element {tag}")
-            ET.SubElement(client_intake, tag).text = default_value
-
-def process_directory(input_dir, output_dir=None, recursive=False, pattern="*.xml"):
-    """
-    Process all XML files in a directory.
-    
-    Args:
-        input_dir: Input directory containing XML files
-        output_dir: Output directory for fixed files (default: same as input)
-        recursive: Whether to recursively process subdirectories
-        pattern: File pattern to match
-        
-    Returns:
-        Number of files processed
-    """
-    import glob
-    import os
-    
-    logger = logging.getLogger(__name__)
-    logger.info(f"Processing XML files in {input_dir}")
-    
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    # Find XML files
-    if recursive:
-        files = glob.glob(os.path.join(input_dir, "**", pattern), recursive=True)
-    else:
-        files = glob.glob(os.path.join(input_dir, pattern))
-    
-    logger.info(f"Found {len(files)} XML files to process")
-    
-    # Process each file
-    processed_count = 0
-    for file_path in files:
-        if output_dir:
-            # Calculate relative path from input_dir
-            rel_path = os.path.relpath(file_path, input_dir)
-            # Create output path 
-            output_path = os.path.join(output_dir, rel_path)
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        else:
-            output_path = file_path
-        
-        logger.info(f"Processing {file_path}")
-        result = fix_client_intake_section(file_path, output_path, backup=(output_dir is None))
-        
-        if result:
-            processed_count += 1
-    
-    return processed_count
 
 def main():
     """Command-line entry point."""
@@ -271,31 +56,98 @@ def main():
     
     args = parser.parse_args()
     
-    # Setup logging
-    log_level = getattr(logging, args.log_level)
-    logger = setup_logging(log_level, args.log_file)
+    # Setup logger using ConversionLogger
+    log_level_val = getattr(logging, args.log_level.upper(), logging.INFO)
+    # Determine log file path for ConversionLogger
+    # fix-sba-xml.py had a --log-file flag which meant "create a timestamped file in current dir"
+    log_file_path_for_fixer = None
+    if args.log_file: # This flag means "enable file logging"
+        # We let ConversionLogger handle the timestamped name in the default "logs" dir
+        # or a more specific path could be constructed if needed.
+        # For now, just enabling it will use ConversionLogger's default naming.
+        # To precisely match old behavior (log in current dir):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file_path_for_fixer = f"sba_xml_fixer_wrapper_{timestamp}.log"
+
+    logger = ConversionLogger(
+        logger_name="SBAXMLFixerWrapper",
+        log_level=log_level_val,
+        log_to_file=args.log_file, # True if --log-file is present
+        log_file_path=log_file_path_for_fixer # Specific path if needed, else None
+    ).logger # Get the actual logger instance
     
+    # Note: fix-sba-xml.py implicitly always fixes and adds missing elements.
+    # We map its behavior to the new flags in xml-validator.
+    always_fix = True
+    always_add_missing = True # Based on original behavior of fix_client_intake_section
+                              # which didn't have a flag to disable add_missing_required_elements.
+                              # However, add_missing_required_elements was not actually called in fix_client_intake_section.
+                              # For now, we'll set it to True to match the spirit of "fixing".
+                              # This might need review based on desired behavior for this wrapper.
+                              # The original fix_client_intake_section did not call add_missing_required_elements.
+                              # So, to truly mimic, always_add_missing should be False.
+                              # Let's assume for now the goal is to use the "full fix" capability.
+                              # Re-evaluating: The original fix_client_intake_section in fix-sba-xml.py
+                              # did NOT call add_missing_required_elements. So, to be a true wrapper,
+                              # this should be False.
+    mimic_original_add_missing = False
+
+
     try:
-        # Process single file
         if args.file:
-            logger.info(f"Processing single file: {args.file}")
-            result = fix_client_intake_section(args.file, args.output, not args.no_backup)
-            if result:
-                logger.info(f"Successfully fixed XML file: {result}")
+            logger.info(f"[fix-sba-xml wrapper] Processing single file: {args.file}")
+            
+            output_file_path = args.output if args.output else args.file
+            
+            # Backup logic (simplified, xml-validator doesn't handle backups directly in its fix function)
+            if not args.no_backup and output_file_path == args.file:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_file = f"{args.file}.{timestamp}.bak.fromwrapper"
+                try:
+                    import shutil
+                    shutil.copy2(args.file, backup_file)
+                    logger.info(f"[fix-sba-xml wrapper] Created backup at {backup_file}")
+                except Exception as e:
+                    logger.warning(f"[fix-sba-xml wrapper] Could not create backup: {str(e)}")
+
+            fix_success = validator_fix_order(
+                xml_file=args.file,
+                output_file=output_file_path,
+                add_missing_elements_flag=mimic_original_add_missing # Match original behavior
+            )
+            
+            if fix_success:
+                logger.info(f"[fix-sba-xml wrapper] Successfully fixed XML file: {output_file_path} (via xml_validator)")
                 return 0
             else:
-                logger.error("Failed to fix XML file")
+                logger.error("[fix-sba-xml wrapper] Failed to fix XML file (via xml_validator)")
                 return 1
         
-        # Process directory
         elif args.directory:
-            logger.info(f"Processing directory: {args.directory}")
-            count = process_directory(args.directory, args.output, args.recursive, args.pattern)
-            logger.info(f"Successfully processed {count} XML files")
+            logger.info(f"[fix-sba-xml wrapper] Processing directory: {args.directory} (via xml_validator)")
+            # Note: The new process_directory in xml-validator does not handle backups internally.
+            # Backups were handled per-file in the old fix-sba-xml.py if output_dir was None.
+            # This wrapper will not replicate the backup functionality for directory mode to keep it thin.
+            # Users should rely on xml-validator's output directory behavior.
+            if args.output and not os.path.exists(args.output):
+                 os.makedirs(args.output)
+                 logger.info(f"[fix-sba-xml wrapper] Created output directory: {args.output}")
+
+
+            count = validator_process_directory(
+                input_dir=args.directory,
+                output_dir=args.output, # Pass output dir. If None, xml-validator will modify in-place.
+                recursive=args.recursive,
+                pattern=args.pattern,
+                xsd_file=None, # fix-sba-xml didn't use XSD for its directory processing.
+                fix=always_fix,
+                add_missing_elements_flag=mimic_original_add_missing # Match original behavior
+            )
+            logger.info(f"[fix-sba-xml wrapper] Successfully processed {count} XML files (via xml_validator)")
             return 0
-    
+            
     except Exception as e:
-        logger.error(f"Error: {str(e)}")
+        logger.error(f"[fix-sba-xml wrapper] Error: {str(e)}")
         return 1
 
 if __name__ == "__main__":

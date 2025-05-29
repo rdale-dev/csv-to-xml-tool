@@ -128,4 +128,69 @@ NO_CONTACT_HOUR_SESSION_TYPES = [
 ]
 
 # Counseling date validation threshold
-MIN_COUNSELING_DATE = "2023-10-01"  
+MIN_COUNSELING_DATE = "2023-10-01"
+
+# == Mappings and Defaults for classDataConverter.py (ManagementTrainingReport) ==
+
+# Training Topics
+TRAINING_TOPIC_MAPPINGS = {
+    'Technology': 'Technology', 'Tech': 'Technology', 'IT': 'Technology', 'Computer': 'Technology', 'Software': 'Technology',
+    'Marketing': 'Marketing/Sales', 'Sales': 'Marketing/Sales', 'Advertising': 'Marketing/Sales',
+    'Start-up': 'Business Start-up/Preplanning', 'Startup': 'Business Start-up/Preplanning', 'Starting a Business': 'Business Start-up/Preplanning',
+    'Business Plan': 'Business Plan', 'Planning': 'Business Plan',
+    'Financing': 'Business Financing/Capital Sources', 'Capital': 'Business Financing/Capital Sources', 'Funding': 'Business Financing/Capital Sources',
+    'International': 'International Trade', 'Global': 'International Trade', 'Export': 'International Trade',
+    'eCommerce': 'eCommerce', 'E-Commerce': 'eCommerce', 'Online Business': 'eCommerce',
+    'Legal': 'Legal Issues', 'Law': 'Legal Issues', 'Compliance': 'Legal Issues',
+    'Tax': 'Tax Planning', 'Taxes': 'Tax Planning',
+    'Contracting': 'Government Contracting', 'Government': 'Government Contracting', 'Federal': 'Government Contracting',
+    'Cyber': 'Cyber Security/Cyber Awareness', 'Security': 'Cyber Security/Cyber Awareness',
+    'HR': 'Human Resources/Managing Employees', 'Human Resources': 'Human Resources/Managing Employees', 'Employee': 'Human Resources/Managing Employees',
+    'Accounting': 'Business Accounting/Budget', 'Budget': 'Business Accounting/Budget', 'Finance': 'Business Accounting/Budget',
+    'Cash Flow': 'Business Financial/Cash Flow', 'Financial': 'Business Financial/Cash Flow',
+    'Customer': 'Customer Relations', 'Service': 'Customer Relations',
+    'Disaster': 'Disaster Planning/Recovery', 'Recovery': 'Disaster Planning/Recovery', 'Emergency': 'Disaster Planning/Recovery',
+    'Buy/Sell': 'Buy/Sell Business', 'Acquisition': 'Buy/Sell Business', 'Merger': 'Buy/Sell Business',
+    'Franchise': 'Franchising',
+    'IP': 'Intellectual Property Training', 'Patent': 'Intellectual Property Training', 'Trademark': 'Intellectual Property Training',
+    'Credit': 'Credit Counseling', 'Loan': 'Credit Counseling',
+    'Operations': 'Business Operations/Management', 'Management': 'Business Operations/Management'
+}
+
+VALID_TRAINING_TOPICS = [
+    "Business Accounting/Budget", "Business Financial/Cash Flow", "Business Financing/Capital Sources",
+    "Business Operations/Management", "Business Plan", "Business Start-up/Preplanning", "Buy/Sell Business",
+    "Credit Counseling", "Customer Relations", "Cyber Security/Cyber Awareness", "Disaster Planning/Recovery",
+    "eCommerce", "Franchising", "Government Contracting", "Human Resources/Managing Employees",
+    "Intellectual Property Training", "International Trade", "Legal Issues", "Marketing/Sales",
+    "Tax Planning", "Technology", "Other"
+]
+DEFAULT_TRAINING_TOPIC = "Technology"
+
+# Program Formats
+PROGRAM_FORMAT_MAPPINGS = {
+    'Hybrid': 'Hybrid', 'In-person': 'In-person', 'On Demand': 'On Demand', 'Online': 'Online',
+    'Seminar': 'In-person', 'Course': 'In-person', 'Teleconference': 'Online', 'On-line Course': 'Online',
+    'In person': 'In-person', 'Webinar': 'Online', 'Virtual': 'Online', 'Remote': 'Online',
+    'Zoom': 'Online', 'Teams': 'Online', 'Face-to-face': 'In-person', 'F2F': 'In-person',
+    'Classroom': 'In-person', 'Blended': 'Hybrid', 'On-Demand': 'On Demand',
+    'Self-paced': 'On Demand', 'Recording': 'On Demand'
+}
+
+VALID_PROGRAM_FORMATS = [
+    "Hybrid", "In-person", "On Demand", "Online"
+]
+DEFAULT_PROGRAM_FORMAT = "In-person"
+
+# Other Defaults for ManagementTrainingReport
+# DEFAULT_TRAINING_LOCATION_CODE is already covered by DEFAULT_LOCATION_CODE = "249003"
+DEFAULT_TRAINING_SESSIONS = "1"
+DEFAULT_TRAINING_HOURS = "1.5"
+DEFAULT_TRAINING_EVENT_TITLE_PREFIX = "Training Event " # Note the space
+DEFAULT_TRAINING_LOCATION_CITY = "Des Moines"
+DEFAULT_TRAINING_LOCATION_STATE = "Iowa" 
+DEFAULT_TRAINING_LOCATION_ZIP = "50312"
+DEFAULT_TRAINING_LOCATION_COUNTRY = "United States"
+DEFAULT_TRAINING_PARTNER_CODE = "Women's Business Center"
+DEFAULT_TRAINING_FEES = "0"
+# DEFAULT_TRAINING_LANGUAGE is already covered by DEFAULT_LANGUAGE = "English"

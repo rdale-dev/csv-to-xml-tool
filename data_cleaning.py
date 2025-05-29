@@ -7,89 +7,131 @@ import re
 from datetime import datetime
 from config import MAX_FIELD_LENGTHS, MIN_COUNSELING_DATE
 
-def standardize_state_name(state):
+DEFAULT_STATE_MAPPINGS = {
+    'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas', 'CA': 'California',
+    'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware', 'FL': 'Florida', 'GA': 'Georgia',
+    'HI': 'Hawaii', 'ID': 'Idaho', 'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa',
+    'KS': 'Kansas', 'KY': 'Kentucky', 'LA': 'Louisiana', 'ME': 'Maine', 'MD': 'Maryland',
+    'MA': 'Massachusetts', 'MI': 'Michigan', 'MN': 'Minnesota', 'MS': 'Mississippi',
+    'MO': 'Missouri', 'MT': 'Montana', 'NE': 'Nebraska', 'NV': 'Nevada', 'NH': 'New Hampshire',
+    'NJ': 'New Jersey', 'NM': 'New Mexico', 'NY': 'New York', 'NC': 'North Carolina',
+    'ND': 'North Dakota', 'OH': 'Ohio', 'OK': 'Oklahoma', 'OR': 'Oregon', 'PA': 'Pennsylvania',
+    'RI': 'Rhode Island', 'SC': 'South Carolina', 'SD': 'South Dakota', 'TN': 'Tennessee',
+    'TX': 'Texas', 'UT': 'Utah', 'VT': 'Vermont', 'VA': 'Virginia', 'WA': 'Washington',
+    'WV': 'West Virginia', 'WI': 'Wisconsin', 'WY': 'Wyoming', 'DC': 'District of Columbia',
+    'AS': 'American Samoa', 'GU': 'Guam', 'MP': 'Northern Mariana Islands', 'PR': 'Puerto Rico',
+    'VI': 'U.S. Virgin Islands'
+}
+
+# Default list of valid states, can be overridden by valid_states_list
+DEFAULT_VALID_STATES = set(DEFAULT_STATE_MAPPINGS.values()) | {
+    "Armed Forces Europe", "Armed Forces Pacific", "Armed Forces the Americas",
+    "Federated States of Micronesia", "Marshall Islands", "Republic of Palau",
+    "United States Minor Outlying Islands"
+}
+
+
+def standardize_state_name(state_value, valid_states_list=None, default_return=""):
     """
-    Standardizes state codes to ensure they match the required format in XSD.
-    Converts state abbreviations to full state names and handles various formats.
+    Standardizes state codes/names. Converts abbreviations to full names,
+    validates against an optional list, and handles various formats.
     
     Args:
-        state: State name or code
+        state_value: State name or code.
+        valid_states_list: Optional list/set of valid state names. If provided,
+                           the standardized name must be in this list.
+        default_return: Value to return if input is empty, unstandardizable,
+                        or not in valid_states_list (if provided).
         
     Returns:
-        Standardized state name
+        Standardized and validated state name, or default_return.
     """
-    if not state or str(state).strip() == "" or str(state).lower() == "nan":
-        return ""  # Return empty string if state is empty
+    if not state_value or str(state_value).strip() == "" or str(state_value).lower() == "nan":
+        return default_return
     
-    state_str = str(state).strip()
+    state_str = str(state_value).strip()
+    standardized_name = ""
+
+    # Check direct abbreviation mapping (case-insensitive)
+    if state_str.upper() in DEFAULT_STATE_MAPPINGS:
+        standardized_name = DEFAULT_STATE_MAPPINGS[state_str.upper()]
+    else:
+        # Check if it's already a full name (case-insensitive match against values)
+        for abbr, full_name in DEFAULT_STATE_MAPPINGS.items():
+            if state_str.lower() == full_name.lower():
+                standardized_name = full_name # Use the canonical casing
+                break
+        if not standardized_name: # If still not found, it might be a non-abbreviated valid state or an unknown one
+            # Attempt a direct case-insensitive match against a broader list of known full names
+            # This helps if valid_states_list is not provided but we still want to match "california" to "California"
+            temp_valid_list = valid_states_list if valid_states_list is not None else DEFAULT_VALID_STATES
+            for valid_st in temp_valid_list:
+                if state_str.lower() == valid_st.lower():
+                    standardized_name = valid_st # Use the canonical casing from the list
+                    break
+            if not standardized_name: # If it's not in any known mapping or list, it's unstandardizable
+                 # If not found after all checks, return the original value if no validation list,
+                 # or prepare for validation failure if a list is provided.
+                 standardized_name = state_str # Keep original if truly unknown
+
+    if not standardized_name: # Should not happen if state_str was not empty initially, but as a safeguard
+        return default_return
+
+    # Validate against the provided list if one is given
+    if valid_states_list is not None:
+        if standardized_name not in valid_states_list:
+            # Try a case-insensitive check against valid_states_list as a last resort
+            found_in_list_case_insensitive = False
+            for valid_item in valid_states_list:
+                if standardized_name.lower() == valid_item.lower():
+                    standardized_name = valid_item # Correct casing from valid_states_list
+                    found_in_list_case_insensitive = True
+                    break
+            if not found_in_list_case_insensitive:
+                return default_return
     
-    # State code to full name mapping
-    state_map = {
-        "AL": "Alabama",
-        "AK": "Alaska",
-        "AZ": "Arizona",
-        "AR": "Arkansas",
-        "CA": "California",
-        "CO": "Colorado",
-        "CT": "Connecticut",
-        "DE": "Delaware",
-        "FL": "Florida",
-        "GA": "Georgia",
-        "HI": "Hawaii",
-        "ID": "Idaho",
-        "IL": "Illinois",
-        "IN": "Indiana",
-        "IA": "Iowa",
-        "KS": "Kansas",
-        "KY": "Kentucky",
-        "LA": "Louisiana",
-        "ME": "Maine",
-        "MD": "Maryland",
-        "MA": "Massachusetts",
-        "MI": "Michigan",
-        "MN": "Minnesota",
-        "MS": "Mississippi",
-        "MO": "Missouri",
-        "MT": "Montana",
-        "NE": "Nebraska",
-        "NV": "Nevada",
-        "NH": "New Hampshire",
-        "NJ": "New Jersey",
-        "NM": "New Mexico",
-        "NY": "New York",
-        "NC": "North Carolina",
-        "ND": "North Dakota",
-        "OH": "Ohio",
-        "OK": "Oklahoma",
-        "OR": "Oregon",
-        "PA": "Pennsylvania",
-        "RI": "Rhode Island",
-        "SC": "South Carolina",
-        "SD": "South Dakota",
-        "TN": "Tennessee",
-        "TX": "Texas",
-        "UT": "Utah",
-        "VT": "Vermont",
-        "VA": "Virginia",
-        "WA": "Washington",
-        "WV": "West Virginia",
-        "WI": "Wisconsin",
-        "WY": "Wyoming",
-        "DC": "District of Columbia"
-    }
+    return standardized_name
+
+def map_value(value, mapping_dict, default_value, case_sensitive=False):
+    """
+    Maps an input value using a dictionary, with options for case sensitivity
+    and a default return value.
+
+    Args:
+        value: The input value to map.
+        mapping_dict: A dictionary where keys are input values and values are
+                      the mapped output values.
+        default_value: The value to return if the input value is not found
+                       in mapping_dict or if value is None/empty.
+        case_sensitive: Boolean, if False (default), perform case-insensitive
+                        matching for keys in mapping_dict.
+
+    Returns:
+        The mapped value or default_value.
+    """
+    if value is None:
+        return default_value
     
-    # Case insensitive check for state codes
-    for code, name in state_map.items():
-        if state_str.upper() == code:
-            return name
-    
-    # Already a full state name or unrecognized value - do a case-insensitive check
-    for name in state_map.values():
-        if state_str.lower() == name.lower():
-            return name  # Return the proper case version
-    
-    # If we couldn't match it, return the original value
-    return state_str
+    value_str = str(value).strip()
+    if not value_str: # Handles empty string and strings that become empty after strip
+        return default_value
+
+    if not case_sensitive:
+        # Iterate through dict keys for case-insensitive comparison
+        for k, v in mapping_dict.items():
+            if str(k).lower() == value_str.lower():
+                return v
+        # If no case-insensitive match, proceed to return default_value
+    else:
+        # Case-sensitive lookup
+        if value_str in mapping_dict:
+            return mapping_dict[value_str]
+        # Check if original value (if not string) is in mapping_dict
+        elif value in mapping_dict:
+             return mapping_dict[value]
+
+
+    return default_value
 
 def standardize_country_code(country):
     """
@@ -156,48 +198,53 @@ def clean_phone_number(phone):
         
     return ''.join(char for char in str(phone) if char.isdigit())
 
-def format_date(date_str):
+def format_date(date_str, input_formats=None, default_return=""):
     """
     Converts date from various formats to YYYY-MM-DD format.
-    Returns empty string if date_str is empty or None.
+    Returns default_return if date_str is empty, None, or cannot be parsed.
     
-    Handles Salesforce date formats:
-        - MM/DD/YYYY
-        - YYYY-MM-DD
-        - MM-DD-YYYY
+    Args:
+        date_str: The date string to parse.
+        input_formats: Optional list of strptime formats to try.
+                       If None, uses a default list.
+        default_return: Value to return if parsing fails or input is empty.
     """
     if not date_str or str(date_str).strip() == "" or str(date_str).lower() == "nan":
-        return ""
+        return default_return
+
+    date_str = str(date_str).strip()
+
+    if input_formats is None or not input_formats:
+        # Default list of formats, similar to what was in classDataConverter.py
+        # and data_cleaning.py (implicitly)
+        input_formats = [
+            '%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', 
+            '%m/%d/%y', '%d-%m-%Y', # Added %d-%m-%Y from classDataConverter
+            # The following are variations to catch common cases if year is 2 digits
+            '%Y/%m/%d', '%y/%m/%d', 
+            '%m-%d-%y', 
+        ]
+
+    for fmt in input_formats:
+        try:
+            # Handle cases like 'YYYY-M-D' by first parsing and then reformatting
+            dt_object = datetime.strptime(date_str, fmt)
+            return dt_object.strftime('%Y-%m-%d')
+        except ValueError:
+            continue
     
-    try:
-        # Try different date formats
-        date_str = str(date_str).strip()
-        
-        # Check if it's already in YYYY-MM-DD format
-        if re.match(r'\d{4}-\d{1,2}-\d{1,2}', date_str):
-            year, month, day = date_str.split('-')
-            month = month.zfill(2)
-            day = day.zfill(2)
-            return f"{year}-{month}-{day}"
-        
-        # Try MM/DD/YYYY format
-        elif '/' in date_str:
-            month, day, year = date_str.split('/')
-            month = month.zfill(2)
-            day = day.zfill(2)
-            return f"{year}-{month}-{day}"
-        
-        # Try MM-DD-YYYY format
-        elif '-' in date_str:
-            month, day, year = date_str.split('-')
-            month = month.zfill(2)
-            day = day.zfill(2)
-            return f"{year}-{month}-{day}"
-            
-        # If nothing else works, return as is
-        return date_str
-    except (ValueError, AttributeError):
-        return ""
+    # If direct parsing fails, try to handle YYYY-MM-DD with potentially single-digit month/day
+    # This was partially handled by regex before, now using strptime flexibility
+    # and ensuring output is zero-padded.
+    if re.match(r'\d{4}-\d{1,2}-\d{1,2}', date_str):
+        try:
+            # This will parse 'YYYY-M-D' and similar
+            dt_object = datetime.strptime(date_str, '%Y-%m-%d') 
+            return dt_object.strftime('%Y-%m-%d')
+        except ValueError:
+            pass # If it fails here, it's truly unparseable by this specific pattern
+
+    return default_return
 
 def validate_counseling_date(date_str):
     """
