@@ -305,11 +305,19 @@ def build_counselor_record_section(counseling_record, row, record_id):
     create_element(counselor_record, 'FundingSource', '')
 
     # Contact Info (Optional in XSD, but populated from client data per original script)
-    create_element(counselor_record, 'ClientNamePart3', type="PersonType") # This seems to be a mistake in the original logic, should likely be CounselorName, but following original structure.
+    # The XSD shows these elements as optional. We are populating them for completeness.
+    counselor_name_part3 = create_element(counselor_record, 'ClientNamePart3')
+    create_element(counselor_name_part3, 'Last', row.get('Last Name', ''))
+    create_element(counselor_name_part3, 'First', row.get('First Name', ''))
+    create_element(counselor_name_part3, 'Middle', row.get('Middle Name', ''))
+    
     create_element(counselor_record, 'Email', row.get('Email', ''))
-    create_element(counselor_record, 'PhonePart3', type="PhoneType") # This also seems like a mistake.
+    
+    phone_part3 = create_element(counselor_record, 'PhonePart3')
+    create_element(phone_part3, 'Primary', clean_phone_number(row.get('Contact: Phone', '')))
+    create_element(phone_part3, 'Secondary', '')
 
-    # **FIX**: Fully populate the AddressPart3 block to resolve "City is required" errors.
+    # Address for Part 3 - This is required for US-based addresses
     address_part3 = create_element(counselor_record, 'AddressPart3')
     create_element(address_part3, 'Street1', row.get('Mailing Street', ''))
     create_element(address_part3, 'Street2', '')
@@ -383,4 +391,3 @@ def build_counselor_record_section(counseling_record, row, record_id):
     create_element(counselor_record, 'SBALoanAmount', clean_numeric(row.get('SBA Loan Amount', '0')))
     create_element(counselor_record, 'NonSBALoanAmount', clean_numeric(row.get('Non-SBA Loan Amount', '0')))
     create_element(counselor_record, 'EquityCapitalReceived', clean_numeric(row.get('Amount of Equity Capital Received', '0')))
-```
