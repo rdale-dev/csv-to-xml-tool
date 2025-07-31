@@ -14,16 +14,16 @@ import logging # Keep standard logging import for levels like logging.INFO
 from datetime import datetime
 
 # Local setup_logging will be removed.
-# from logging_util import logger # Default instance not used here.
-from logging_util import ConversionLogger # Import ConversionLogger
+# from .logging_util import logger # Default instance not used here.
+from .logging_util import ConversionLogger # Import ConversionLogger
 
 # Import necessary functions from xml_validator
 # Note: If xml_validator.py is in the same directory or PYTHONPATH, this should work.
 # Otherwise, sys.path manipulations might be needed, or a proper package structure.
 try:
-    from xml_validator import fix_client_intake_element_order as validator_fix_order
-    from xml_validator import process_directory as validator_process_directory
-    from xml_validator import validate_against_xsd 
+    from .xml_validator import fix_client_intake_element_order as validator_fix_order
+    from .xml_validator import process_directory as validator_process_directory
+    from .xml_validator import validate_against_xsd
 except ImportError:
     # Fallback or error handling if xml_validator is not found directly
     # This might happen if they are not in the same directory and PYTHONPATH isn't set up.

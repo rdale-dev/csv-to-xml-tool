@@ -5,7 +5,7 @@ This module contains functions for cleaning and standardizing Salesforce data fo
 """
 import re
 from datetime import datetime
-from config import MAX_FIELD_LENGTHS, MIN_COUNSELING_DATE
+from .config import CounselingConfig
 
 DEFAULT_STATE_MAPPINGS = {
     'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas', 'CA': 'California',
@@ -51,6 +51,10 @@ def standardize_state_name(state_value, valid_states_list=None, default_return="
     
     state_str = str(state_value).strip()
     standardized_name = ""
+
+    # Handle special cases first
+    if state_str.lower() == 'd.c.':
+        return 'District of Columbia'
 
     # Check direct abbreviation mapping (case-insensitive)
     if state_str.upper() in DEFAULT_STATE_MAPPINGS:
@@ -261,7 +265,7 @@ def validate_counseling_date(date_str):
     
     try:
         date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        min_date = datetime.strptime(MIN_COUNSELING_DATE, "%Y-%m-%d")
+        min_date = datetime.strptime(CounselingConfig.MIN_COUNSELING_DATE, "%Y-%m-%d")
         return date_obj >= min_date
     except ValueError:
         return False
@@ -360,7 +364,7 @@ def clean_percentage(value):
     except (ValueError, TypeError):
         raise ValueError(f"Invalid percentage value: {value}")
 
-def truncate_counselor_notes(notes, max_length=MAX_FIELD_LENGTHS["CounselorNotes"]):
+def truncate_counselor_notes(notes, max_length=CounselingConfig.MAX_FIELD_LENGTHS["CounselorNotes"]):
     """
     Cleans counselor notes and ensures they don't exceed the maximum length.
     If notes exceed max_length, they are truncated at a sentence or word boundary.

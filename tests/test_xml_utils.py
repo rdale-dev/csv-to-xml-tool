@@ -1,6 +1,12 @@
 import unittest
 import xml.etree.ElementTree as ET
-from xml_utils import create_element, escape_xml
+import sys
+import os
+
+# Add the project root to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from src.xml_utils import create_element, escape_xml
 
 class TestXmlElementCreation(unittest.TestCase):
 
