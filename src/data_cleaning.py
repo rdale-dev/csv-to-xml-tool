@@ -250,26 +250,6 @@ def format_date(date_str, input_formats=None, default_return=""):
 
     return default_return
 
-def validate_counseling_date(date_str):
-    """
-    Validates that the counseling date is not before MIN_COUNSELING_DATE.
-    
-    Args:
-        date_str: A date string in YYYY-MM-DD format
-        
-    Returns:
-        Boolean indicating if the date is valid
-    """
-    if not date_str:
-        return True
-    
-    try:
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        min_date = datetime.strptime(CounselingConfig.MIN_COUNSELING_DATE, "%Y-%m-%d")
-        return date_obj >= min_date
-    except ValueError:
-        return False
-
 def clean_whitespace(text):
     """
     Cleans excess whitespace from text while preserving normal spacing between words and sentences.
@@ -331,38 +311,45 @@ def split_multi_value(value, delimiter=";"):
 
 def clean_numeric(value):
     """
-    Cleans numeric values to ensure they're valid.
-    Returns empty string if invalid or None.
+    Cleans a numeric string by removing commas, currency symbols, and whitespace.
+    Extracts digits and optional decimal point.
     """
-    if not value or str(value).strip() == "" or str(value).lower() == "nan":
+    if value is None or str(value).strip() == "" or str(value).strip().lower() == "nan":
         return ""
     
+    cleaned_str = str(value).replace(" ", "").replace("$", "").replace(",", "")
+
     try:
-        # Try to convert to float and then string (removes redundant .0)
-        float_val = float(value)
-        # If it's a whole number, return it as an integer
+        float_val = float(cleaned_str)
         if float_val.is_integer():
             return str(int(float_val))
-        # Otherwise return as float
         return str(float_val)
     except (ValueError, TypeError):
         return ""
 
 def clean_percentage(value):
     """
-    Cleans percentage values ensuring they're valid.
+    Cleans a percentage string, removing the % symbol and converting to a decimal.
     Returns a number between 0 and 100.
     """
     if not value or str(value).strip() == "" or str(value).lower() == "nan":
         return "0"
     
+    value_str = str(value).strip()
+    if value_str.endswith('%'):
+        value_str = value_str[:-1].strip()
+
     try:
-        float_val = float(value)
+        float_val = float(value_str)
         # Ensure it's between 0 and 100
-        float_val = max(0, min(100, float_val))
+        float_val = float(max(0, min(100, float_val)))
+
+        if float_val.is_integer():
+            return str(int(float_val))
+
         return str(float_val)
     except (ValueError, TypeError):
-        raise ValueError(f"Invalid percentage value: {value}")
+        return "0"
 
 def truncate_counselor_notes(notes, max_length=CounselingConfig.MAX_FIELD_LENGTHS["CounselorNotes"]):
     """

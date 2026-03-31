@@ -11,17 +11,18 @@ from collections import defaultdict, Counter
 class ValidationTracker:
     """Tracks validation issues during the conversion process."""
     
+
     def __init__(self):
         """Initialize the validation tracker."""
-        # Store validation issues as a list of dictionaries
         self.issues = []
-        
-        # Track counts by category and type
         self.issue_counts = defaultdict(Counter)
-        
-        # Track processed records
         self.total_records = 0
         self.successful_records = 0
+        self.failed_records = 0
+        self.current_record_id = None
+
+    def set_current_record_id(self, record_id):
+        self.current_record_id = record_id
     
     def add_issue(self, record_id, severity, category, field_name, message):
         """
@@ -75,6 +76,13 @@ class ValidationTracker:
             'warnings_by_category': dict(self.issue_counts['warning'])
         }
     
+    def to_dict(self):
+        """Return all tracker state as a JSON-serializable dict."""
+        return {
+            "summary": self.get_summary(),
+            "issues": self.issues,
+        }
+
     def print_summary(self):
         """Print a summary of validation issues to the console."""
         summary = self.get_summary()
@@ -134,26 +142,10 @@ class ValidationTracker:
         
         return csv_file
     
-    def generate_html_report(self, output_dir="."):
-        """
-        Generate an HTML report of validation issues.
-        
-        Args:
-            output_dir: Directory to save the HTML report
-            
-        Returns:
-            Path to the created HTML file
-        """
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        html_file = os.path.join(output_dir, f"validation_report_{timestamp}.html")
-        
-        summary = self.get_summary()
-        
-        # Generate HTML content
-        html_content = f"""<!DOCTYPE html>
+
+    def _generate_html_header(self):
+        """Generate the HTML header and styles."""
+        return f"""<!DOCTYPE html>
 <html>
 <head>
     <title>CSV to XML Conversion Validation Report</title>
@@ -173,7 +165,11 @@ class ValidationTracker:
 <body>
     <h1>CSV to XML Conversion Validation Report</h1>
     <p>Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-    
+"""
+
+    def _generate_summary_section(self, summary):
+        """Generate the summary section HTML."""
+        return f"""
     <div class="summary">
         <h2>Summary</h2>
         <p>Total records processed: <strong>{summary['total_records']}</strong></p>
@@ -183,52 +179,35 @@ class ValidationTracker:
         <p>Total warnings: <strong class="warning">{summary['warning_count']}</strong></p>
     </div>
 """
-        
-        # Add error categories table if there are errors
-        if summary['errors_by_category']:
-            html_content += """
-    <h2>Errors by Category</h2>
+
+    def _generate_category_table(self, title, categories):
+        """Generate a table for issue categories."""
+        if not categories:
+            return ""
+
+        html_content = f"""
+    <h2>{title}</h2>
     <table>
         <tr>
             <th>Category</th>
             <th>Count</th>
         </tr>
 """
-            for category, count in sorted(summary['errors_by_category'].items(), key=lambda x: x[1], reverse=True):
-                html_content += f"""
-        <tr>
+        for category, count in sorted(categories.items(), key=lambda x: x[1], reverse=True):
+            html_content += f"""        <tr>
             <td>{category}</td>
             <td>{count}</td>
         </tr>
 """
-            html_content += """
-    </table>
-"""
-        
-        # Add warning categories table if there are warnings
-        if summary['warnings_by_category']:
-            html_content += """
-    <h2>Warnings by Category</h2>
-    <table>
-        <tr>
-            <th>Category</th>
-            <th>Count</th>
-        </tr>
-"""
-            for category, count in sorted(summary['warnings_by_category'].items(), key=lambda x: x[1], reverse=True):
-                html_content += f"""
-        <tr>
-            <td>{category}</td>
-            <td>{count}</td>
-        </tr>
-"""
-            html_content += """
-    </table>
-"""
-        
-        # Add detailed issues table if there are issues
-        if self.issues:
-            html_content += """
+        html_content += "    </table>\n"
+        return html_content
+
+    def _generate_issues_table(self):
+        """Generate the detailed issues table."""
+        if not self.issues:
+            return ""
+
+        html_content = """
     <h2>Detailed Issues</h2>
     <table>
         <tr>
@@ -239,14 +218,13 @@ class ValidationTracker:
             <th>Message</th>
         </tr>
 """
-            
-            # Sort issues by severity (errors first) and then by record ID
-            sorted_issues = sorted(self.issues, key=lambda x: (0 if x['severity'] == 'error' else 1, x['record_id']))
-            
-            for issue in sorted_issues:
-                severity_class = "error" if issue['severity'] == 'error' else "warning"
-                html_content += f"""
-        <tr>
+
+        # Sort issues by severity (errors first) and then by record ID
+        sorted_issues = sorted(self.issues, key=lambda x: (0 if x['severity'] == 'error' else 1, x['record_id']))
+
+        for issue in sorted_issues:
+            severity_class = "error" if issue['severity'] == 'error' else "warning"
+            html_content += f"""        <tr>
             <td>{issue['record_id']}</td>
             <td class="{severity_class}">{issue['severity'].upper()}</td>
             <td>{issue['category']}</td>
@@ -254,13 +232,36 @@ class ValidationTracker:
             <td>{issue['message']}</td>
         </tr>
 """
+
+        html_content += "    </table>\n"
+        return html_content
+
+    def generate_html_report(self, output_dir="."):
+        """
+        Generate an HTML report of validation issues.
+
+        Args:
+            output_dir: Directory to save the HTML report
             
-            html_content += """
-    </table>
-"""
+        Returns:
+            Path to the created HTML file
+        """
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        html_file = os.path.join(output_dir, f"validation_report_{timestamp}.html")
+
+        summary = self.get_summary()
+
+        # Assemble HTML content
+        html_content = self._generate_html_header()
+        html_content += self._generate_summary_section(summary)
+        html_content += self._generate_category_table("Errors by Category", summary['errors_by_category'])
+        html_content += self._generate_category_table("Warnings by Category", summary['warnings_by_category'])
+        html_content += self._generate_issues_table()
         
-        html_content += """
-</body>
+        html_content += """</body>
 </html>
 """
         
@@ -269,6 +270,3 @@ class ValidationTracker:
             f.write(html_content)
         
         return html_file
-
-# Create a default validator instance
-validator = ValidationTracker()  
