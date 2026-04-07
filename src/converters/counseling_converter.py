@@ -4,9 +4,7 @@ Handles the conversion of Salesforce counseling data (Form 641) from CSV to XML.
 
 import csv
 import xml.etree.ElementTree as ET
-import os
 import re
-from datetime import datetime
 
 from .base_converter import BaseConverter
 from ..config import CounselingConfig, GeneralConfig, ValidationCategory
@@ -89,23 +87,8 @@ class CounselingConverter(BaseConverter):
         create_element(client_name, 'First', row.get('First Name', ''))
         create_element(client_name, 'Middle', row.get('Middle Name', ''))
         create_element(client_request, 'Email', row.get('Email', ''))
-        phone = create_element(client_request, 'PhonePart1')
-        create_element(phone, 'Primary', data_cleaning.clean_phone_number(row.get('Contact: Phone', '')))
-        create_element(phone, 'Secondary', '')
-        address = create_element(client_request, 'AddressPart1')
-        create_element(address, 'Street1', row.get('Mailing Street', ''))
-        create_element(address, 'Street2', '')
-        create_element(address, 'City', row.get('Mailing City', ''))
-        create_element(address, 'State', data_cleaning.standardize_state_name(row.get('Mailing State/Province', '')))
-        zip_full = str(row.get('Mailing Zip/Postal Code', '')).strip()
-        zip_5digit_match = re.match(r'^\d{5}', zip_full)
-        zip_5digit = zip_5digit_match.group(0) if zip_5digit_match else ''
-        if not zip_5digit and zip_full:
-            self.validator.add_issue(record_id, "warning", ValidationCategory.INVALID_FORMAT, "Mailing Zip/Postal Code", f"Could not parse 5-digit ZIP from '{zip_full}'.")
-        create_element(address, 'ZipCode', zip_5digit)
-        create_element(address, 'Zip4Code', '')
-        country = create_element(address, 'Country')
-        create_element(country, 'Code', data_cleaning.standardize_country_code(row.get('Mailing Country', 'US')))
+        self._build_phone(client_request, 'PhonePart1', row)
+        self._build_address(client_request, 'AddressPart1', row, record_id)
         create_element(client_request, 'SurveyAgreement', row.get('Agree to Impact Survey', 'No'))
         signature = create_element(client_request, 'ClientSignature')
         create_element(signature, 'Date', data_cleaning.format_date(row.get('Client Signature - Date', '')))
@@ -176,7 +159,9 @@ class CounselingConverter(BaseConverter):
         create_element(client_intake, 'ConductingBusinessOnline', row.get('Conduct Business Online?', self.general_config.DEFAULT_BUSINESS_STATUS))
         create_element(client_intake, 'ClientIntake_Certified8a', row.get('8(a) Certified?(old)', self.general_config.DEFAULT_BUSINESS_STATUS))
         create_element(client_intake, 'TotalNumberOfEmployees', data_cleaning.clean_numeric(row.get('Total Number of Employees', '0')))
-        create_element(client_intake, 'NumberOfEmployeesInExportingBusiness', '0')
+        exporting_employees1 = data_cleaning.clean_numeric(row.get('Number of Employees in Exporting Business', ''))
+        if exporting_employees1 and float(exporting_employees1) > 0:
+            create_element(client_intake, 'NumberOfEmployeesInExportingBusiness', str(int(float(exporting_employees1))))
 
         income_part2 = create_element(client_intake, 'ClientAnnualIncomePart2')
         create_element(income_part2, 'GrossRevenues', data_cleaning.clean_numeric(row.get('Gross Revenues/Sales', '0')))
@@ -229,26 +214,15 @@ class CounselingConverter(BaseConverter):
 
         create_element(counselor_record, 'Email', row.get('Email', ''))
 
-        phone_part3 = create_element(counselor_record, 'PhonePart3')
-        create_element(phone_part3, 'Primary', data_cleaning.clean_phone_number(row.get('Contact: Phone', '')))
-        create_element(phone_part3, 'Secondary', '')
+        self._build_phone(counselor_record, 'PhonePart3', row)
 
-        address_part3 = create_element(counselor_record, 'AddressPart3')
-        create_element(address_part3, 'Street1', row.get('Mailing Street', ''))
-        create_element(address_part3, 'Street2', '')
-        create_element(address_part3, 'City', row.get('Mailing City', ''))
-        create_element(address_part3, 'State', data_cleaning.standardize_state_name(row.get('Mailing State/Province', '')))
-        zip_full_p3 = str(row.get('Mailing Zip/Postal Code', '')).strip()
-        zip_5digit_match_p3 = re.match(r'^\d{5}', zip_full_p3)
-        zip_5digit_p3 = zip_5digit_match_p3.group(0) if zip_5digit_match_p3 else ''
-        create_element(address_part3, 'ZipCode', zip_5digit_p3)
-        create_element(address_part3, 'Zip4Code', '')
-        country_p3 = create_element(address_part3, 'Country')
-        create_element(country_p3, 'Code', data_cleaning.standardize_country_code(row.get('Mailing Country', 'US')))
+        self._build_address(counselor_record, 'AddressPart3', row, record_id)
 
         create_element(counselor_record, 'VerifiedToBeInBusiness', 'Undetermined')
         create_element(counselor_record, 'ReportableImpact', row.get('Reportable Impact', self.general_config.DEFAULT_BUSINESS_STATUS))
-        create_element(counselor_record, 'DateOfReportableImpact', data_cleaning.format_date(row.get('Reportable Impact Date', '')))
+        impact_date = data_cleaning.format_date(row.get('Reportable Impact Date', ''))
+        if impact_date:
+            create_element(counselor_record, 'DateOfReportableImpact', impact_date)
         create_element(counselor_record, 'CurrentlyExporting', self.general_config.DEFAULT_BUSINESS_STATUS)
 
         business_start_date = data_cleaning.format_date(row.get('Business Start Date', '')) or data_cleaning.format_date(row.get('Date Started (Meeting)', ''))
@@ -256,7 +230,9 @@ class CounselingConverter(BaseConverter):
             create_element(counselor_record, 'BusinessStartDatePart3', business_start_date)
 
         create_element(counselor_record, 'TotalNumberOfEmployees', data_cleaning.clean_numeric(row.get('Total No. of Employees (Meeting)', row.get('Total Number of Employees', '0'))))
-        create_element(counselor_record, 'NumberOfEmployeesInExportingBusiness', '0')
+        exporting_employees2 = data_cleaning.clean_numeric(row.get('Number of Employees in Exporting Business', ''))
+        if exporting_employees2 and float(exporting_employees2) > 0:
+            create_element(counselor_record, 'NumberOfEmployeesInExportingBusiness', str(int(float(exporting_employees2))))
 
         income_part3 = create_element(counselor_record, 'ClientAnnualIncomePart3')
         create_element(income_part3, 'GrossRevenues', data_cleaning.clean_numeric(row.get('Gross Revenues/Sales (Meeting)', row.get('Gross Revenues/Sales', '0'))))
@@ -297,3 +273,27 @@ class CounselingConverter(BaseConverter):
         create_element(counselor_record, 'SBALoanAmount', data_cleaning.clean_numeric(row.get('SBA Loan Amount', '0')))
         create_element(counselor_record, 'NonSBALoanAmount', data_cleaning.clean_numeric(row.get('Non-SBA Loan Amount', '0')))
         create_element(counselor_record, 'EquityCapitalReceived', data_cleaning.clean_numeric(row.get('Amount of Equity Capital Received', '0')))
+
+
+    def _build_address(self, parent, element_name, row, record_id):
+        address = create_element(parent, element_name)
+        create_element(address, 'Street1', row.get('Mailing Street', ''))
+        create_element(address, 'Street2', '')
+        create_element(address, 'City', row.get('Mailing City', ''))
+        create_element(address, 'State', data_cleaning.standardize_state_name(row.get('Mailing State/Province', '')))
+        zip_full = str(row.get('Mailing Zip/Postal Code', '')).strip()
+        zip_5digit_match = re.match(r'^\d{5}', zip_full)
+        zip_5digit = zip_5digit_match.group(0) if zip_5digit_match else ''
+        if not zip_5digit and zip_full:
+            self.validator.add_issue(record_id, "warning", ValidationCategory.INVALID_FORMAT, "Mailing Zip/Postal Code", f"Could not parse 5-digit ZIP from '{zip_full}'.")
+        create_element(address, 'ZipCode', zip_5digit)
+        create_element(address, 'Zip4Code', '')
+        country = create_element(address, 'Country')
+        create_element(country, 'Code', data_cleaning.standardize_country_code(row.get('Mailing Country', 'US')))
+
+    def _build_phone(self, parent, element_name, row):
+        phone = create_element(parent, element_name)
+        create_element(phone, 'Primary', data_cleaning.clean_phone_number(row.get('Contact: Phone', '')))
+        secondary_phone = data_cleaning.clean_phone_number(row.get('Contact: Secondary Phone', ''))
+        if secondary_phone:
+            create_element(phone, 'Secondary', secondary_phone)

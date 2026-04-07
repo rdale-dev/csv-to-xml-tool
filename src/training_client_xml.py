@@ -12,16 +12,16 @@ import argparse
 import logging # Keep standard logging import for levels like logging.INFO
 
 # Import data cleaning functions from existing module
-from data_cleaning import (
-    clean_phone_number, format_date, clean_whitespace, 
-    map_gender_to_sex, split_multi_value, clean_numeric, clean_percentage,
+from .data_cleaning import (
+    clean_phone_number, format_date, clean_whitespace,
+    map_gender_to_sex, split_multi_value, clean_numeric,
     truncate_counselor_notes, standardize_country_code, standardize_state_name
 )
 
-# Import constants from config (if needed)
-from config import (
-    DEFAULT_LOCATION_CODE, DEFAULT_LANGUAGE, ValidationCategory
-)
+# Import constants from config
+from .config import GeneralConfig, ValidationCategory
+
+DEFAULT_LOCATION_CODE = GeneralConfig.DEFAULT_LOCATION_CODE
 
 # ================ DEFAULT VALUES ================
 # Iowa-specific defaults
@@ -69,7 +69,7 @@ def get_value_with_default(row, field_name, default_value):
     return value
 
 # ================ XML GENERATION FUNCTIONS ================
-from xml_utils import create_element
+from .xml_utils import create_element
 
 def build_client_request_section(counseling_record, row, record_id, logger):
     """
@@ -127,12 +127,8 @@ def build_client_request_section(counseling_record, row, record_id, logger):
         signature_onfile = 'No'
     create_element(signature, 'OnFile', signature_onfile)
 
-def build_client_intake_section(counseling_record, row, record_id, logger):
-    """
-    Builds the ClientIntake section of the XML with comprehensive defaults.
-    """
-    client_intake = create_element(counseling_record, 'ClientIntake')
-    
+
+def _build_race_info(client_intake, row):
     # Race information (multi-value field)
     race = create_element(client_intake, 'Race')
     race_codes = split_multi_value(row.get('Race', ''))
@@ -143,7 +139,8 @@ def build_client_intake_section(counseling_record, row, record_id, logger):
         for code in race_codes:
             create_element(race, 'Code', code)
     create_element(race, 'SelfDescribedRace', '')
-    
+
+def _build_demographics_info(client_intake, row):
     # Demographics - required fields with defaults
     ethnicity = get_value_with_default(row, 'Ethnicity', DEFAULT_ETHNICITY)
     create_element(client_intake, 'Ethnicity', ethnicity)
@@ -155,7 +152,8 @@ def build_client_intake_section(counseling_record, row, record_id, logger):
     
     disability = get_value_with_default(row, 'Disability', DEFAULT_DISABILITY)
     create_element(client_intake, 'Disability', disability)
-    
+
+def _build_military_info(client_intake, row):
     # Military information - required with default
     military_status = get_value_with_default(row, 'Veteran Status', DEFAULT_MILITARY_STATUS)
     create_element(client_intake, 'MilitaryStatus', military_status)
@@ -164,7 +162,8 @@ def build_client_intake_section(counseling_record, row, record_id, logger):
     if military_status not in ['Prefer not to say', 'No military service']:
         branch = get_value_with_default(row, 'Branch Of Service', 'Prefer not to say')
         create_element(client_intake, 'BranchOfService', branch)
-    
+
+def _build_media_info(client_intake, row):
     # Referral information (Media)
     media_codes = split_multi_value(row.get('What Prompted you to contact us?', ''))
     if media_codes or row.get('Internet (specify)'):
@@ -174,7 +173,8 @@ def build_client_intake_section(counseling_record, row, record_id, logger):
         media_other = row.get('Internet (specify)', '')
         if media_other:
             create_element(media, 'Other', media_other)
-    
+
+def _build_business_info(client_intake, row):
     # Business information - required fields with defaults
     currently_in_business = get_value_with_default(row, 'Currently in Business?', DEFAULT_BUSINESS_STATUS)
     create_element(client_intake, 'CurrentlyInBusiness', currently_in_business)
@@ -200,7 +200,8 @@ def build_client_intake_section(counseling_record, row, record_id, logger):
     
     certified_8a = get_value_with_default(row, '8(a) Certified?', DEFAULT_BUSINESS_STATUS)
     create_element(client_intake, 'ClientIntake_Certified8a', certified_8a)
-    
+
+def _build_financial_info(client_intake, row):
     # Employee and financial information
     employees = row.get('Total Number of Employees', '0')
     create_element(client_intake, 'TotalNumberOfEmployees', clean_numeric(employees))
@@ -214,7 +215,8 @@ def build_client_intake_section(counseling_record, row, record_id, logger):
     create_element(client_annual_income, 'ProfitLoss', clean_numeric(profit_loss))
     
     create_element(client_annual_income, 'ExportGrossRevenuesOrSales', '0')
-    
+
+def _build_legal_entity_info(client_intake, row):
     # Legal entity information
     legal_entity_codes = split_multi_value(row.get('Legal Entity of Business', ''))
     if legal_entity_codes or row.get('Other legal entity (specify)'):
@@ -224,10 +226,8 @@ def build_client_intake_section(counseling_record, row, record_id, logger):
         legal_entity_other = row.get('Other legal entity (specify)', '')
         if legal_entity_other:
             create_element(legal_entity, 'Other', legal_entity_other)
-    
-    # Rural/Urban status - required with default
-    create_element(client_intake, 'Rural_vs_Urban', 'Undetermined')
-    
+
+def _build_counseling_seeking_info(client_intake, row):
     # Counseling seeking information
     counseling_seeking_codes = split_multi_value(row.get('Nature of the Counseling Seeking?', ''))
     if counseling_seeking_codes:
@@ -236,27 +236,29 @@ def build_client_intake_section(counseling_record, row, record_id, logger):
             create_element(counseling_seeking, 'Code', code)
         create_element(counseling_seeking, 'Other', '')
 
-def build_training_counselor_record_section(counseling_record, row, record_id, logger, training_hours=DEFAULT_TRAINING_HOURS):
+
+def build_client_intake_section(counseling_record, row, record_id, logger):
     """
-    Builds the CounselorRecord section with training-specific elements and defaults.
-    
-    Args:
-        counseling_record: The parent XML element
-        row: Dictionary of field values
-        record_id: ID of the record
-        logger: Logger instance
-        training_hours: Default training hours to use if not specified in CSV
+    Builds the ClientIntake section of the XML with comprehensive defaults.
     """
-    counselor_record = create_element(counseling_record, 'CounselorRecord')
-    
-    # CHANGE 3: Use Class Member ID as the PartnerSessionNumber, generate if missing
-    session_number = get_value_with_default(row, 'Class Member ID', f"TRN{record_id}")
-    create_element(counselor_record, 'PartnerSessionNumber', session_number)
-    
-    # Still need Class/Event ID for the training section
-    class_id = get_value_with_default(row, 'Class/Event ID', f"CLS{record_id}")
-    
-    # Contact information - repeat from ClientRequest with defaults
+    client_intake = create_element(counseling_record, 'ClientIntake')
+
+    _build_race_info(client_intake, row)
+    _build_demographics_info(client_intake, row)
+    _build_military_info(client_intake, row)
+    _build_media_info(client_intake, row)
+    _build_business_info(client_intake, row)
+    _build_financial_info(client_intake, row)
+    _build_legal_entity_info(client_intake, row)
+
+    # Rural/Urban status - required with default
+    create_element(client_intake, 'Rural_vs_Urban', 'Undetermined')
+
+    _build_counseling_seeking_info(client_intake, row)
+
+
+def _add_training_contact_info(counselor_record, row):
+    """Helper to add contact information to a counselor record."""
     counselor_name = create_element(counselor_record, 'ClientNamePart3')
     create_element(counselor_name, 'Last', get_value_with_default(row, 'Last Name', DEFAULT_LAST_NAME))
     create_element(counselor_name, 'First', get_value_with_default(row, 'First Name', DEFAULT_FIRST_NAME))
@@ -268,8 +270,10 @@ def build_training_counselor_record_section(counseling_record, row, record_id, l
     phone = create_element(counselor_record, 'PhonePart3')
     create_element(phone, 'Primary', clean_phone_number(row.get('Phone', '')))
     create_element(phone, 'Secondary', '')
-    
-    # Address information (optional but adding for completeness)
+
+
+def _add_training_address_info(counselor_record, row):
+    """Helper to add address information to a counselor record."""
     address = create_element(counselor_record, 'AddressPart3')
     create_element(address, 'Street1', row.get('Mailing Street', ''))
     create_element(address, 'Street2', '')
@@ -290,6 +294,52 @@ def build_training_counselor_record_section(counseling_record, row, record_id, l
     country_value = get_value_with_default(row, 'Mailing Country', DEFAULT_COUNTRY)
     standardized_country = standardize_country_code(country_value)
     create_element(country, 'Code', standardized_country)
+
+
+def _add_training_session_info(counselor_record, row, class_id, training_hours):
+    """Helper to add training session specific information."""
+    training_session = create_element(counselor_record, 'TrainingSession')
+
+    # DateTrainingStarted - use the Start Date or current date if missing
+    training_date = format_date(row.get('Start Date', ''))
+    if not training_date:
+        training_date = datetime.now().strftime("%Y-%m-%d")
+    create_element(training_session, 'DateTrainingStarted', training_date)
+
+    # Partner Training Number - use Class/Event ID or generate one
+    create_element(training_session, 'PartnerTrainingNumber', class_id)
+
+    # Employees Trained - default to 1 (the attendee)
+    create_element(training_session, 'EmployeesTrained', str(DEFAULT_EMPLOYEES_TRAINED))
+
+    # Hours Trained - use default value
+    create_element(training_session, 'HoursTrained', str(training_hours))
+
+def build_training_counselor_record_section(counseling_record, row, record_id, logger, training_hours=DEFAULT_TRAINING_HOURS):
+    """
+    Builds the CounselorRecord section with training-specific elements and defaults.
+
+    Args:
+        counseling_record: The parent XML element
+        row: Dictionary of field values
+        record_id: ID of the record
+        logger: Logger instance
+        training_hours: Default training hours to use if not specified in CSV
+    """
+    counselor_record = create_element(counseling_record, 'CounselorRecord')
+
+    # CHANGE 3: Use Class Member ID as the PartnerSessionNumber, generate if missing
+    session_number = get_value_with_default(row, 'Class Member ID', f"TRN{record_id}")
+    create_element(counselor_record, 'PartnerSessionNumber', session_number)
+
+    # Still need Class/Event ID for the training section
+    class_id = get_value_with_default(row, 'Class/Event ID', f"CLS{record_id}")
+
+    # Contact information - repeat from ClientRequest with defaults
+    _add_training_contact_info(counselor_record, row)
+
+    # Address information (optional but adding for completeness)
+    _add_training_address_info(counselor_record, row)
     
     # Status fields (optional but recommended)
     create_element(counselor_record, 'VerifiedToBeInBusiness', 'Undetermined')
@@ -324,22 +374,7 @@ def build_training_counselor_record_section(counseling_record, row, record_id, l
     create_element(counseling_provided, 'Code', counseling_type)
     
     # Training-specific section (required for training clients)
-    training_session = create_element(counselor_record, 'TrainingSession')
-    
-    # DateTrainingStarted - use the Start Date or current date if missing
-    training_date = format_date(row.get('Start Date', ''))
-    if not training_date:
-        training_date = datetime.now().strftime("%Y-%m-%d")
-    create_element(training_session, 'DateTrainingStarted', training_date)
-    
-    # Partner Training Number - use Class/Event ID or generate one
-    create_element(training_session, 'PartnerTrainingNumber', class_id)
-    
-    # Employees Trained - default to 1 (the attendee)
-    create_element(training_session, 'EmployeesTrained', str(DEFAULT_EMPLOYEES_TRAINED))
-    
-    # Hours Trained - use default value
-    create_element(training_session, 'HoursTrained', str(training_hours))
+    _add_training_session_info(counselor_record, row, class_id, training_hours)
 
 def create_training_xml_from_csv(csv_file_path, xml_file_path, training_hours=DEFAULT_TRAINING_HOURS, logger=None):
     """
@@ -427,7 +462,7 @@ def main():
     args = parser.parse_args()
     
     # Setup logger using ConversionLogger
-    from logging_util import ConversionLogger
+    from .logging_util import ConversionLogger
     log_level_val = getattr(logging, args.log_level.upper(), logging.INFO)
     # For this script, file logging is not explicitly configured via CLI.
     # Defaulting log_to_file=False for now, or add a --log-file arg if needed.
