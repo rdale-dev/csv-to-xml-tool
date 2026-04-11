@@ -7,6 +7,24 @@ This module is structured with classes to group configurations by their domain:
 - TrainingConfig: Settings specific to the Management Training Report.
 - ValidationCategory: Enumeration of validation issue types.
 """
+from datetime import date
+
+FISCAL_YEAR_START_MONTH = 10
+
+# Shared date input formats (single source of truth)
+DATE_INPUT_FORMATS = [
+    '%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y',
+    '%m/%d/%y', '%d-%m-%Y',
+    '%Y/%m/%d', '%y/%m/%d',
+    '%m-%d-%y',
+]
+
+
+def _fiscal_year_start():
+    """Compute the start of the current SBA fiscal year (October 1)."""
+    today = date.today()
+    year = today.year if today.month >= FISCAL_YEAR_START_MONTH else today.year - 1
+    return f"{year}-{FISCAL_YEAR_START_MONTH:02d}-01"
 
 # =============================================================================
 # GENERAL CONFIGURATION
@@ -23,9 +41,21 @@ class GeneralConfig:
 class CounselingConfig:
     """Configuration specific to the Counseling (Form 641) XML conversion."""
     REQUIRED_FIELDS = ["Contact ID"]
+
+    # Correct XSD element order for ClientIntake section
+    CLIENT_INTAKE_ELEMENT_ORDER = [
+        'Race', 'Ethnicity', 'Sex', 'Disability', 'MilitaryStatus',
+        'BranchOfService', 'Media', 'Internet', 'CurrentlyInBusiness',
+        'CurrentlyExporting', 'CompanyName', 'BusinessType',
+        'BusinessOwnership', 'ConductingBusinessOnline',
+        'ClientIntake_Certified8a', 'Employee_Owned', 'TotalNumberOfEmployees',
+        'NumberOfEmployeesInExportingBusiness', 'ClientAnnualIncomePart2',
+        'LegalEntity', 'Rural_vs_Urban', 'FIPS_Code', 'CounselingSeeking',
+        'ExportCountries'
+    ]
     DEFAULT_SESSION_TYPE = "Telephone"
     DEFAULT_URBAN_RURAL = "Undetermined"
-    MIN_COUNSELING_DATE = "2023-10-01"
+    MIN_COUNSELING_DATE = _fiscal_year_start()
 
     # List of session types that don't require contact hours
     NO_CONTACT_HOUR_SESSION_TYPES = [
@@ -57,15 +87,6 @@ class CounselingConfig:
         "PartnerSessionNumber": 20
     }
 
-    # Mapping from CSV headers to a conceptual model. This is not used directly
-    # by the new converter but is kept for reference. The new converter will use
-    # more specific mappings.
-    FIELD_MAPPING = {
-        "Contact ID": "PartnerClientNumber",
-        "Last Name": "ClientRequest_LastName",
-        # ... (rest of the original FIELD_MAPPING can be kept for reference if needed)
-    }
-
 # =============================================================================
 # TRAINING REPORT CONFIGURATION (MANAGEMENT TRAINING)
 # =============================================================================
@@ -89,10 +110,8 @@ class TrainingConfig:
         "country": "United States"
     }
 
-    # Date formats to try when parsing
-    DATE_INPUT_FORMATS = [
-        '%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%m-%d-%Y', '%m/%d/%y'
-    ]
+    # Date formats to try when parsing (references the shared list)
+    DATE_INPUT_FORMATS = DATE_INPUT_FORMATS
 
     # Mapping for CSV column names. This allows flexibility if headers change.
     COLUMN_MAPPING = {
@@ -118,17 +137,15 @@ class TrainingConfig:
 
     # Mappings for specific field values
     TRAINING_TOPIC_MAPPINGS = {
-        'Technology': 'Technology', 'Tech': 'Technology', 'IT': 'Technology', # ... (and so on)
+        'Technology': 'Technology', 'Tech': 'Technology', 'IT': 'Technology',
         'Marketing': 'Marketing/Sales', 'Sales': 'Marketing/Sales',
         'Start-up': 'Business Start-up/Preplanning', 'Startup': 'Business Start-up/Preplanning',
         'Business Plan': 'Business Plan',
-        # ... (full map from original config)
     }
 
     PROGRAM_FORMAT_MAPPINGS = {
         'Hybrid': 'Hybrid', 'In-person': 'In-person', 'On Demand': 'On Demand', 'Online': 'Online',
         'Seminar': 'In-person', 'Webinar': 'Online', 'Virtual': 'Online', 'Remote': 'Online',
-        # ... (full map from original config)
     }
 
     # Keywords for parsing demographic data from free-text fields
@@ -157,6 +174,90 @@ class TrainingConfig:
             "hispanic": ['hispanic', 'latino'],
             "non_hispanic_keywords": ['non-hispanic'] # This is for explicit non-hispanic values
         }
+    }
+
+
+# =============================================================================
+# TRAINING CLIENT CONFIGURATION (FORM 641 - TRAINING CLIENTS)
+# =============================================================================
+class TrainingClientConfig:
+    """Configuration for converting training client CSV data to Form 641 XML.
+
+    Training clients fill out a smaller form with different column names.
+    This config maps those columns to the counseling-format columns expected
+    by CounselingConverter, and provides defaults for absent fields.
+    """
+
+    # Maps training client CSV column names to counseling converter column names
+    COLUMN_MAPPING = {
+        'Phone': 'Contact: Phone',
+        'Company': 'Account Name',
+        'Street': 'Mailing Street',
+        'city': 'Mailing City',
+        'State': 'Mailing State/Province',
+        'Zip code': 'Mailing Zip/Postal Code',
+        'Disabilities': 'Disability',
+        'Military Status': 'Veteran Status',
+        'Ethnicity': 'Ethnicity:',
+        'Class/Event ID': 'Activity ID',
+        'Class Teacher': 'Name of Counselor',
+        'Start Date': 'Date',
+        'Class/Event Type': 'Type of Session',
+        'Currently in Business?': 'Currently In Business?',
+    }
+
+    # Default values for counseling columns absent from the training client CSV
+    DEFAULTS = {
+        'Middle Name': '',
+        'Contact: Secondary Phone': '',
+        'Mailing Country': 'US',
+        'Agree to Impact Survey': 'No',
+        'Client Signature - Date': '',
+        'Client Signature(On File)': 'No',
+        'Branch Of Service': '',
+        'What Prompted you to contact us?': '',
+        'Internet (specify)': '',
+        'InternetUsage': '',
+        'Are you currently exporting?(old)': 'No',
+        'Type of Business': '',
+        'Business Ownership - % Female(old)': '0',
+        'Conduct Business Online?': 'No',
+        '8(a) Certified?(old)': 'No',
+        'Total Number of Employees': '',
+        'Number of Employees in Exporting Business': '',
+        'Gross Revenues/Sales': '',
+        'Profits/Losses': '',
+        'Rural_vs_Urban': 'Undetermined',
+        'FIPS_Code': '',
+        'Nature of the Counseling Seeking?': '',
+        'Nature of the Counseling Seeking - Other Detail': '',
+        'Legal Entity of Business': '',
+        'Other legal entity (specify)': '',
+        'Verified To Be In Business': 'Undetermined',
+        'Reportable Impact': 'No',
+        'Reportable Impact Date': '',
+        'Business Start Date': '',
+        'Date Started (Meeting)': '',
+        'Total No. of Employees (Meeting)': '',
+        'Gross Revenues/Sales (Meeting)': '',
+        'Profit & Loss (Meeting)': '',
+        'SBA Loan Amount': '0',
+        'Non-SBA Loan Amount': '0',
+        'Amount of Equity Capital Received': '0',
+        'Certifications (SDB, HUBZONE, etc)': '',
+        'Other Certifications': '',
+        'SBA Financial Assistance': '',
+        'Other SBA Financial Assistance': '',
+        'Services Provided': 'Business Start-up/Preplanning',
+        'Other Counseling Provided': '',
+        'Referred Client to': '',
+        'Other (Referred Client to)': '',
+        'Language(s) Used': 'English',
+        'Language(s) Used (Other)': '',
+        'Duration (hours)': '0',
+        'Prep Hours': '0',
+        'Travel Hours': '0',
+        'Comments': '',
     }
 
 

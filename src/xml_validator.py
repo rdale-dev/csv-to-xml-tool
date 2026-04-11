@@ -4,117 +4,101 @@ This module helps validate and fix common XML structure issues.
 """
 
 import os
-import sys
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 from lxml import etree
-import logging # Keep standard logging import for levels like logging.INFO
+
+import logging
 import re
 
-# Logger will be instantiated in main() using ConversionLogger
-# logger = logging.getLogger(__name__) # To be replaced
+try:
+    from .config import CounselingConfig
+except ImportError:
+    from config import CounselingConfig
 
-from logging_util import ConversionLogger # Import ConversionLogger
 
-def validate_against_xsd(xml_file, xsd_file):
+# Logger will be instantiated in main() using ConversionLogger,
+# but for standalone functions we provide a fallback
+logger = logging.getLogger(__name__)
+
+def _setup_sys_path():
+    """Ensure the script can be run standalone by adding its directory to sys.path."""
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# ConversionLogger is imported lazily in main() to avoid breaking package imports
+
+def _validate_file_paths(xml_file, xsd_file, enforce_data_dir=False):
+    """Resolve and validate file paths against traversal. Returns (xml_path, xsd_path) or an error dict."""
+    xml_file = os.path.realpath(xml_file)
+    xsd_file = os.path.realpath(xsd_file)
+    if enforce_data_dir:
+        _data_dir_env = os.environ.get("DATA_DIR", "")
+        if _data_dir_env:
+            _data_dir = os.path.realpath(_data_dir_env)
+            if not xml_file.startswith(_data_dir):
+                return {"is_valid": False, "errors": ["Invalid XML file path"]}
+    if not xsd_file.startswith(os.sep):
+        return {"is_valid": False, "errors": ["Invalid XSD file path"]}
+    return xml_file, xsd_file
+
+
+def validate_against_xsd(xml_file, xsd_file, enforce_data_dir=False):
     """
     Validate XML against an XSD schema.
-    
+
     Args:
         xml_file: Path to the XML file
         xsd_file: Path to the XSD schema file
-        
+        enforce_data_dir: If True, require xml_file to be under DATA_DIR
+
     Returns:
-        Tuple (is_valid, errors)
+        Dict with 'is_valid' bool and 'errors' list
     """
     try:
-        # Parse the XSD schema
-        xmlschema_doc = etree.parse(xsd_file)
+        path_result = _validate_file_paths(xml_file, xsd_file, enforce_data_dir=enforce_data_dir)
+        if isinstance(path_result, dict):
+            return path_result
+        xml_file, xsd_file = path_result
+
+        parser = etree.XMLParser(resolve_entities=False)
+        xmlschema_doc = etree.parse(xsd_file, parser=parser)
         xmlschema = etree.XMLSchema(xmlschema_doc)
-        
-        # Parse the XML file
-        xml_doc = etree.parse(xml_file)
-        
-        # Validate
+        xml_doc = etree.parse(xml_file, parser=parser)
+
         is_valid = xmlschema.validate(xml_doc)
-        
-        # Get validation errors
         errors = []
         if not is_valid:
             for error in xmlschema.error_log:
                 errors.append(f"Line {error.line}: {error.message}")
-        
-        return is_valid, errors
-    except Exception as e:
-        return False, [f"Validation error: {str(e)}"]
+
+        return {"is_valid": is_valid, "errors": errors}
+    except (OSError, etree.XMLSyntaxError, etree.XMLSchemaError, etree.XMLSchemaParseError):
+        logger.exception("Error during XML/XSD validation")
+        return {"is_valid": False, "errors": ["Validation error"]}
 
 def extract_validation_details(error_message):
     """
     Extract element names and expected elements from a validation error message.
-    
+
     Args:
         error_message: The validation error message
-        
+
     Returns:
         Tuple (invalid_element, expected_elements)
     """
     invalid_match = re.search(r"Invalid content was found starting with element '([^']+)'", error_message)
     expected_match = re.search(r"One of '{([^}]+)}' is expected", error_message)
-    
+
     invalid_element = invalid_match.group(1) if invalid_match else None
     expected_elements = expected_match.group(1).split(', ') if expected_match else []
-    
-    return invalid_element, expected_elements
 
-def fix_client_intake_element_order(xml_file, output_file=None):
-    """
-    Fix the order of elements in the ClientIntake section according to the XSD schema.
-    
-    Args:
-        xml_file: Path to the XML file
-        output_file: Path to save the fixed XML file (if None, will modify the original)
-        
-    Returns:
-        Boolean indicating success
-    """
-    if output_file is None:
-        output_file = xml_file
-    
-    try:
-        # Parse the XML file
-        tree = ET.parse(xml_file)
-        root = tree.getroot()
-        
-        # Define the correct order of elements in ClientIntake
-        client_intake_order = [
-            'Race', 'Ethnicity', 'Sex', 'Disability', 'MilitaryStatus', 
-            'BranchOfService', 'Media', 'Internet', 'CurrentlyInBusiness', 
-            'CurrentlyExporting', 'CompanyName', 'BusinessType', 
-            'BusinessOwnership', 'ConductingBusinessOnline', 
-            'ClientIntake_Certified8a', 'Employee_Owned', 'TotalNumberOfEmployees',
-            'NumberOfEmployeesInExportingBusiness', 'ClientAnnualIncomePart2',
-            'LegalEntity', 'Rural_vs_Urban', 'FIPS_Code', 'CounselingSeeking',
-            'ExportCountries'
-        ]
-        
-        # Process each CounselingRecord
-        for counseling_record in root.findall('CounselingRecord'):
-            client_intake = counseling_record.find('ClientIntake')
-            if client_intake is not None:
-                # Reorder elements in ClientIntake
-                reorder_elements(client_intake, client_intake_order)
-        
-        # Save the fixed XML
-        tree.write(output_file, encoding='utf-8', xml_declaration=True)
-        return True
-    except Exception as e:
-        logger.error(f"Error fixing XML file: {str(e)}")
-        return False
+    return invalid_element, expected_elements
 
 def add_missing_required_elements(client_intake, record_id):
     """
     Add any missing required elements to ClientIntake.
     (Function moved from fix-sba-xml.py)
-    
+
     Args:
         client_intake: ClientIntake element
         record_id: ID of the counseling record (for logging)
@@ -122,10 +106,10 @@ def add_missing_required_elements(client_intake, record_id):
     # Define required elements and their default values
     # This list might need to be configurable or expanded later.
     required_elements = {
-        'CurrentlyInBusiness': 'No', 
+        'CurrentlyInBusiness': 'No',
         # Add other known required elements for ClientIntake here if they have simple defaults
     }
-    
+
     elements_added = False
     for tag, default_value in required_elements.items():
         if client_intake.find(tag) is None:
@@ -138,115 +122,104 @@ def fix_client_intake_element_order(xml_file, output_file=None, add_missing_elem
     """
     Fix the order of elements in the ClientIntake section according to the XSD schema.
     Optionally adds missing required elements.
-    
+
     Args:
         xml_file: Path to the XML file
         output_file: Path to save the fixed XML file (if None, will modify the original)
         add_missing_elements_flag: If True, add missing required elements.
-        
+
     Returns:
         Boolean indicating success
     """
     if output_file is None:
         output_file = xml_file
-    
+
     try:
         # Parse the XML file
         tree = ET.parse(xml_file)
         root = tree.getroot()
-        
-        # Define the correct order of elements in ClientIntake
-        client_intake_order = [
-            'Race', 'Ethnicity', 'Sex', 'Disability', 'MilitaryStatus', 
-            'BranchOfService', 'Media', 'Internet', 'CurrentlyInBusiness', 
-            'CurrentlyExporting', 'CompanyName', 'BusinessType', 
-            'BusinessOwnership', 'ConductingBusinessOnline', 
-            'ClientIntake_Certified8a', 'Employee_Owned', 'TotalNumberOfEmployees',
-            'NumberOfEmployeesInExportingBusiness', 'ClientAnnualIncomePart2',
-            'LegalEntity', 'Rural_vs_Urban', 'FIPS_Code', 'CounselingSeeking',
-            'ExportCountries'
-        ]
-        
+
+        client_intake_order = CounselingConfig.CLIENT_INTAKE_ELEMENT_ORDER
+
         # Process each CounselingRecord
         for counseling_record in root.findall('CounselingRecord'):
             record_id_element = counseling_record.find('PartnerClientNumber')
-            record_id = record_id_element.text if record_id_element is not None else "UNKNOWN_RECORD"
-            
+            record_id = (record_id_element.text or "UNKNOWN_RECORD") if record_id_element is not None else "UNKNOWN_RECORD"
+
             client_intake = counseling_record.find('ClientIntake')
             if client_intake is not None:
                 if add_missing_elements_flag:
                     add_missing_required_elements(client_intake, record_id)
                 # Reorder elements in ClientIntake
                 reorder_elements(client_intake, client_intake_order)
-        
+
         # Save the fixed XML
         tree.write(output_file, encoding='utf-8', xml_declaration=True)
         return True
-    except Exception as e:
+    except (OSError, ET.ParseError) as e:
         logger.error(f"Error fixing XML file: {str(e)}")
         return False
 
-def reorder_elements(parent, element_order):
-    """
-    Reorder child elements according to the specified order.
-    
-    Args:
-        parent: Parent element
-        element_order: List of element names in the correct order
-    """
-    # Create a dictionary to store elements by tag name
+def _collect_elements_by_tag(parent):
+    """Remove all children from parent and return a dict mapping tag -> element or list of elements."""
     elements = {}
-    for child in list(parent):
+    children = list(parent)
+    for child in children:
         tag = child.tag
         if tag in elements:
-            # If we already have this tag, it's a list of elements
             if isinstance(elements[tag], list):
                 elements[tag].append(child)
             else:
                 elements[tag] = [elements[tag], child]
         else:
             elements[tag] = child
-        
-        # Remove the child from the parent
         parent.remove(child)
-    
-    # Add elements back in the correct order
+    return elements
+
+def _append_elements(parent, elements, tag):
+    """Append element(s) for the given tag to parent, handling both single and list values."""
+    item = elements[tag]
+    if isinstance(item, list):
+        for element in item:
+            parent.append(element)
+    else:
+        parent.append(item)
+
+def reorder_elements(parent, element_order):
+    """
+    Reorder child elements according to the specified order.
+
+    Args:
+        parent: Parent element
+        element_order: List of element names in the correct order
+    """
+    elements = _collect_elements_by_tag(parent)
+
     for tag in element_order:
         if tag in elements:
-            if isinstance(elements[tag], list):
-                # Add all elements with this tag
-                for element in elements[tag]:
-                    parent.append(element)
-            else:
-                # Add the single element
-                parent.append(elements[tag])
-    
-    # Add any remaining elements that weren't in the order list
-    for tag, element in elements.items():
+            _append_elements(parent, elements, tag)
+
+    for tag in elements:
         if tag not in element_order:
-            if isinstance(element, list):
-                for item in element:
-                    parent.append(item)
-            else:
-                parent.append(element)
+            _append_elements(parent, elements, tag)
 
 def check_element_order(parent, element_order):
     """
     Check if elements are in the correct order.
-    
+
     Args:
         parent: Parent element
         element_order: List of element names in the correct order
-        
+
     Returns:
         Boolean indicating if there are ordering issues
     """
     # Get tags of child elements
     child_tags = [child.tag for child in parent]
-    
+
     # Find elements from order list that exist in the XML
     expected_order = [tag for tag in element_order if tag in child_tags]
-    
+
     # Check if the actual order matches the expected order
     # This simple check assumes all expected_order elements are present and in sequence.
     # A more robust check might be needed if elements can be optional and still affect order.
@@ -256,13 +229,13 @@ def check_element_order(parent, element_order):
             # Find the current tag's first occurrence in the actual child_tags list
             # starting from where the last tag was found.
             idx = child_tags.index(tag_in_expected_order, current_pos_in_xml)
-            current_pos_in_xml = idx + 1 
+            current_pos_in_xml = idx + 1
         except ValueError:
             # Tag in expected_order is not in child_tags (or not after the previous one)
             # This might indicate an issue or an optional element not present.
             # For strict ordering of present elements, this is an issue.
             return True # Order issue or missing element that breaks sequence
-            
+
     # Check if all elements from child_tags that are in element_order are in the correct sequence
     # This is a more complex check. The current logic in fix-sba-xml.py is simpler:
     last_index_in_parent = -1
@@ -272,22 +245,55 @@ def check_element_order(parent, element_order):
             indices_in_parent = [i for i, child in enumerate(parent) if child.tag == tag_in_schema_order]
             if not indices_in_parent:
                 continue # This element is not in the parent, skip
-            
+
             current_element_first_index = indices_in_parent[0]
-            
+
             if current_element_first_index < last_index_in_parent:
                 return True # Element appeared sooner than a preceding element in schema order
             last_index_in_parent = current_element_first_index
-            
+
             # Additionally, ensure all instances of this tag are contiguous if that's a requirement
             # (The current reorder logic groups them, so this check might be for pre-existing state)
             # For now, just checking first occurrence order.
 
         except ValueError:
             # Element from element_order not found in parent, which is fine if it's optional.
-            pass 
-            
+            pass
+
     return False  # No order issues based on first occurrence
+
+def _resolve_output_path(file_path, input_dir, output_dir):
+    """Compute the output path for a file, creating directories as needed."""
+    if not output_dir:
+        return file_path
+    rel_path = os.path.relpath(file_path, input_dir)
+    output_path = os.path.join(output_dir, rel_path)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    return output_path
+
+def _validate_and_log(file_path, xsd_file, label=""):
+    """Validate an XML file against XSD and log the result. Returns (is_valid, errors)."""
+    logger.info(f"Validating {label}file {file_path} against {xsd_file}...")
+    result = validate_against_xsd(file_path, xsd_file)
+    is_valid, errors = result["is_valid"], result["errors"]
+    if is_valid:
+        logger.info(f"{label.capitalize() if label else ''}File {file_path} is valid.")
+    else:
+        log_fn = logger.warning if label == "original " else logger.error
+        log_fn(f"{label.capitalize() if label else ''}File {file_path} is NOT valid. Errors: {errors}")
+    return is_valid, errors
+
+def _fix_and_revalidate(file_path, output_path, xsd_file, add_missing):
+    """Fix XML file and optionally re-validate. Returns True if fix succeeded."""
+    logger.info(f"Attempting to fix {file_path} -> {output_path}")
+    fix_success = fix_client_intake_element_order(file_path, output_path, add_missing)
+    if not fix_success:
+        logger.error(f"Failed to fix {file_path}")
+        return False
+    logger.info(f"Successfully fixed {file_path}, saved to {output_path}")
+    if xsd_file:
+        _validate_and_log(output_path, xsd_file, "fixed ")
+    return True
 
 def process_directory(input_dir, output_dir=None, recursive=False, pattern="*.xml", xsd_file=None, fix=False, add_missing_elements_flag=False):
     """
@@ -302,13 +308,12 @@ def process_directory(input_dir, output_dir=None, recursive=False, pattern="*.xm
         xsd_file: Path to XSD schema for validation (optional)
         fix: Boolean, if True, fix the XML files.
         add_missing_elements_flag: Boolean, if True and fix is True, add missing elements.
-        
+
     Returns:
         Number of files processed successfully.
     """
     import glob
-    import os
-    
+
     logger.info(f"Processing XML files in directory: {input_dir}")
     if recursive:
         logger.info(f"Recursive mode enabled, pattern: {pattern}")
@@ -317,62 +322,36 @@ def process_directory(input_dir, output_dir=None, recursive=False, pattern="*.xm
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
             logger.info(f"Created output directory: {output_dir}")
-            
-    # Find XML files
+
     search_pattern = os.path.join(input_dir, "**", pattern) if recursive else os.path.join(input_dir, pattern)
     files = glob.glob(search_pattern, recursive=recursive)
-    
     logger.info(f"Found {len(files)} XML files to process.")
-    
+
     processed_count = 0
     for file_path in files:
         logger.info(f"--- Processing file: {file_path} ---")
-        
-        current_output_path = file_path
-        if output_dir:
-            rel_path = os.path.relpath(file_path, input_dir)
-            current_output_path = os.path.join(output_dir, rel_path)
-            # Ensure output subdirectory exists
-            os.makedirs(os.path.dirname(current_output_path), exist_ok=True)
+        current_output_path = _resolve_output_path(file_path, input_dir, output_dir)
 
-        # Validate original file if XSD is provided
         if xsd_file:
-            logger.info(f"Validating original file {file_path} against {xsd_file}...")
-            is_valid, errors = validate_against_xsd(file_path, xsd_file)
-            if is_valid:
-                logger.info(f"Original file {file_path} is valid.")
-            else:
-                logger.warning(f"Original file {file_path} is NOT valid. Errors: {errors}")
+            _validate_and_log(file_path, xsd_file, "original ")
 
         if fix:
-            logger.info(f"Attempting to fix {file_path} -> {current_output_path}")
-            fix_success = fix_client_intake_element_order(file_path, current_output_path, add_missing_elements_flag)
-            if fix_success:
-                logger.info(f"Successfully fixed {file_path}, saved to {current_output_path}")
-                # Re-validate if XSD provided and file was fixed
-                if xsd_file:
-                    logger.info(f"Re-validating fixed file {current_output_path} against {xsd_file}...")
-                    is_valid_after_fix, errors_after_fix = validate_against_xsd(current_output_path, xsd_file)
-                    if is_valid_after_fix:
-                        logger.info(f"Fixed file {current_output_path} is valid.")
-                    else:
-                        logger.error(f"Fixed file {current_output_path} is NOT valid after fixing. Errors: {errors_after_fix}")
+            if _fix_and_revalidate(file_path, current_output_path, xsd_file, add_missing_elements_flag):
                 processed_count += 1
-            else:
-                logger.error(f"Failed to fix {file_path}")
-        elif not xsd_file: # If not fixing and no XSD, then we are just listing files.
+        elif not xsd_file:
             logger.info(f"File {file_path} found (no fix requested, no XSD for validation).")
-            processed_count +=1 # Count as processed for listing purposes
-            
+            processed_count += 1
+
     logger.info(f"Finished processing directory. {processed_count} files processed successfully (or listed).")
     return processed_count
 
-def main():
-    """Main entry point for the script."""
+
+def parse_arguments():
+    """Parse command line arguments."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='XML Validator and Fixer for SBA Counseling Information.')
-    
+
     # Input: single file or directory
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument('--xmlfile', help='Path to a single XML file to process.')
@@ -380,10 +359,10 @@ def main():
 
     # XSD for validation
     parser.add_argument('--xsd', help='Path to the XSD schema file for validation.')
-    
+
     # Output options
     parser.add_argument('--output', help='Path to save the fixed XML file (for single file mode) or output directory (for directory mode).')
-    
+
     # Directory processing options
     parser.add_argument('--recursive', '-r', action='store_true', help='Recursively process subdirectories (used with --directory).')
     parser.add_argument('--pattern', default="*.xml", help='File pattern for XML files (default: *.xml, used with --directory).')
@@ -391,27 +370,77 @@ def main():
     # Fixing options
     parser.add_argument('--fix', action='store_true', help='Enable fixing of XML files (currently fixes ClientIntake element order).')
     parser.add_argument('--add-missing', action='store_true', help='When fixing, also add missing required elements in ClientIntake (e.g., CurrentlyInBusiness).')
-    
+
     # Logging options
-    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], 
+    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         default='INFO', help='Logging level.')
-    
-    args = parser.parse_args()
-    
+
+    return parser.parse_args()
+
+def _validate_and_report(xml_file, xsd_file, logger):
+    """Validate XML against XSD and log detailed error information."""
+    logger.info(f"Validating {xml_file} against {xsd_file}...")
+    result = validate_against_xsd(xml_file, xsd_file)
+    is_valid, errors = result["is_valid"], result["errors"]
+    if is_valid:
+        logger.info("XML is valid!")
+        return
+    logger.error(f"XML is not valid. Found {len(errors)} errors:")
+    for i, error_msg in enumerate(errors, 1):
+        logger.error(f"Error {i}: {error_msg}")
+        invalid_element, expected_elements = extract_validation_details(error_msg)
+        if invalid_element:
+            logger.info(f"  Invalid element: '{invalid_element}'")
+        if expected_elements:
+            logger.info(f"  Expected elements: {', '.join(expected_elements)}")
+
+def _fix_single_file(args, logger):
+    """Fix a single XML file and optionally re-validate."""
+    output_file_path = args.output if args.output else args.xmlfile
+    logger.info(f"Fixing XML file '{args.xmlfile}' and saving to '{output_file_path}'...")
+    fix_success = fix_client_intake_element_order(
+        args.xmlfile, output_file_path, add_missing_elements_flag=args.add_missing
+    )
+    if not fix_success:
+        logger.error(f"Failed to fix XML file '{args.xmlfile}'.")
+        return
+    logger.info("XML file fixed successfully!")
+    if args.xsd:
+        _validate_and_log(output_file_path, args.xsd, "fixed ")
+
+def process_single_file(args, logger):
+    """Process a single XML file for validation and/or fixing."""
+    logger.info(f"Mode: Processing single file '{args.xmlfile}'")
+
+    if args.xsd:
+        _validate_and_report(args.xmlfile, args.xsd, logger)
+
+    if args.fix:
+        _fix_single_file(args, logger)
+    elif not args.xsd:
+        logger.info(f"XML file '{args.xmlfile}' processed (no fix requested, no XSD for validation).")
+
+def main():
+    """Main entry point for the script."""
+    _setup_sys_path()
+    from logging_util import ConversionLogger
+
+    args = parse_arguments()
+
     # Setup logger using ConversionLogger
     log_level_val = getattr(logging, args.log_level.upper(), logging.INFO)
     # For xml-validator, default to console-only logging unless a --log-file arg is added later
     logger = ConversionLogger(
         logger_name="XMLValidator",
         log_level=log_level_val,
-        log_to_file=False 
+        log_to_file=False
     ).logger # Get the actual logger instance
-    
+
     if args.directory:
         # Process directory
         logger.info(f"Mode: Processing directory '{args.directory}'")
         output_dir_for_process = args.output # If None, process_directory handles it (in-place if fix is True)
-        
+
         process_directory(
             input_dir=args.directory,
             output_dir=output_dir_for_process,
@@ -422,58 +451,10 @@ def main():
             add_missing_elements_flag=args.add_missing
         )
     elif args.xmlfile:
-        # Process single file
-        logger.info(f"Mode: Processing single file '{args.xmlfile}'")
-        
-        # Validate original file if XSD is provided
-        if args.xsd:
-            logger.info(f"Validating {args.xmlfile} against {args.xsd}...")
-            is_valid, errors = validate_against_xsd(args.xmlfile, args.xsd)
-            if is_valid:
-                logger.info("XML is valid!")
-            else:
-                logger.error(f"XML is not valid. Found {len(errors)} errors:")
-                for i, error_msg in enumerate(errors, 1):
-                    logger.error(f"Error {i}: {error_msg}")
-                    invalid_element, expected_elements = extract_validation_details(error_msg)
-                    if invalid_element: # expected_elements can be empty
-                        logger.info(f"  Invalid element: '{invalid_element}'")
-                    if expected_elements:
-                         logger.info(f"  Expected elements: {', '.join(expected_elements)}")
-        
-        # Fix the XML file if requested
-        if args.fix:
-            # Determine output path for single file mode
-            # If --output is not provided, fix in-place (output_file = args.xmlfile)
-            # If --output is provided, save to new file.
-            output_file_path = args.output if args.output else args.xmlfile
-            
-            logger.info(f"Fixing XML file '{args.xmlfile}' and saving to '{output_file_path}'...")
-            fix_success = fix_client_intake_element_order(
-                args.xmlfile, 
-                output_file_path, 
-                add_missing_elements_flag=args.add_missing
-            )
-            
-            if fix_success:
-                logger.info("XML file fixed successfully!")
-                # Re-validate if XSD provided and file was fixed
-                if args.xsd:
-                    logger.info(f"Re-validating fixed file {output_file_path} against {args.xsd}...")
-                    is_valid_after_fix, errors_after_fix = validate_against_xsd(output_file_path, args.xsd)
-                    if is_valid_after_fix:
-                        logger.info(f"Fixed file {output_file_path} is valid.")
-                    else:
-                        logger.error(f"Fixed file {output_file_path} is NOT valid after fixing. Errors: {errors_after_fix}")
-            else:
-                logger.error(f"Failed to fix XML file '{args.xmlfile}'.")
-        elif not args.xsd: # No fix, no xsd
-             logger.info(f"XML file '{args.xmlfile}' processed (no fix requested, no XSD for validation).")
-
+        process_single_file(args, logger)
     else:
         # Should not happen due to mutually_exclusive_group
         logger.error("No input specified. Use --xmlfile or --directory.")
-        parser.print_help()
 
 if __name__ == "__main__":
     main()

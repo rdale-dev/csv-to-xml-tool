@@ -1,11 +1,33 @@
-  
+from __future__ import annotations
+
 """
 Enhanced data cleaning and formatting utilities for Salesforce CSV to XML conversion.
 This module contains functions for cleaning and standardizing Salesforce data formats.
 """
+import logging
 import re
 from datetime import datetime
-from .config import CounselingConfig
+from typing import Any
+from .config import CounselingConfig, DATE_INPUT_FORMATS as DEFAULT_DATE_FORMATS
+
+_logger = logging.getLogger(__name__)
+
+UNITED_STATES = "United States"
+UNITED_KINGDOM = "United Kingdom"
+
+# Named constants for magic numbers
+PHONE_NUMBER_DIGITS = 10
+PHONE_WITH_COUNTRY_CODE_DIGITS = 11
+PERCENTAGE_MIN = 0
+PERCENTAGE_MAX = 100
+
+
+def is_empty(value: Any) -> bool:
+    """Check if a value is empty, None, or NaN."""
+    if not value:
+        return True
+    s = str(value).strip()
+    return s == "" or s.lower() == "nan"
 
 DEFAULT_STATE_MAPPINGS = {
     'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas', 'CA': 'California',
@@ -30,73 +52,71 @@ DEFAULT_VALID_STATES = set(DEFAULT_STATE_MAPPINGS.values()) | {
     "United States Minor Outlying Islands"
 }
 
+# Reverse mapping: lowercase full name -> canonical full name
+_STATE_NAME_LOOKUP = {name.lower(): name for name in DEFAULT_STATE_MAPPINGS.values()}
 
-def standardize_state_name(state_value, valid_states_list=None, default_return=""):
+
+def _resolve_state_name(state_str: str, valid_states_list: set[str] | list[str] | None) -> str:
+    """Resolve a state string to its canonical name via abbreviation, full name, or valid states lookup."""
+    if state_str.lower() == 'd.c.':
+        return 'District of Columbia'
+
+    upper = state_str.upper()
+    if upper in DEFAULT_STATE_MAPPINGS:
+        return DEFAULT_STATE_MAPPINGS[upper]
+
+    lower = state_str.lower()
+    if lower in _STATE_NAME_LOOKUP:
+        return _STATE_NAME_LOOKUP[lower]
+
+    reference_list = valid_states_list if valid_states_list is not None else DEFAULT_VALID_STATES
+    for valid_st in reference_list:
+        if lower == valid_st.lower():
+            return valid_st
+
+    return state_str
+
+
+def _case_insensitive_lookup(name: str, valid_states_list: set[str] | list[str]) -> str | None:
+    """Find name in valid_states_list case-insensitively. Returns canonical name or None."""
+    lower = name.lower()
+    for item in valid_states_list:
+        if lower == item.lower():
+            return item
+    return None
+
+
+def standardize_state_name(state_value: str | None, valid_states_list: set[str] | list[str] | None = None, default_return: str = "") -> str:
     """
     Standardizes state codes/names. Converts abbreviations to full names,
     validates against an optional list, and handles various formats.
-    
+
     Args:
         state_value: State name or code.
         valid_states_list: Optional list/set of valid state names. If provided,
                            the standardized name must be in this list.
         default_return: Value to return if input is empty, unstandardizable,
                         or not in valid_states_list (if provided).
-        
+
     Returns:
         Standardized and validated state name, or default_return.
     """
-    if not state_value or str(state_value).strip() == "" or str(state_value).lower() == "nan":
+    if is_empty(state_value):
         return default_return
-    
+
     state_str = str(state_value).strip()
-    standardized_name = ""
+    standardized_name = _resolve_state_name(state_str, valid_states_list)
 
-    # Handle special cases first
-    if state_str.lower() == 'd.c.':
-        return 'District of Columbia'
-
-    # Check direct abbreviation mapping (case-insensitive)
-    if state_str.upper() in DEFAULT_STATE_MAPPINGS:
-        standardized_name = DEFAULT_STATE_MAPPINGS[state_str.upper()]
-    else:
-        # Check if it's already a full name (case-insensitive match against values)
-        for abbr, full_name in DEFAULT_STATE_MAPPINGS.items():
-            if state_str.lower() == full_name.lower():
-                standardized_name = full_name # Use the canonical casing
-                break
-        if not standardized_name: # If still not found, it might be a non-abbreviated valid state or an unknown one
-            # Attempt a direct case-insensitive match against a broader list of known full names
-            # This helps if valid_states_list is not provided but we still want to match "california" to "California"
-            temp_valid_list = valid_states_list if valid_states_list is not None else DEFAULT_VALID_STATES
-            for valid_st in temp_valid_list:
-                if state_str.lower() == valid_st.lower():
-                    standardized_name = valid_st # Use the canonical casing from the list
-                    break
-            if not standardized_name: # If it's not in any known mapping or list, it's unstandardizable
-                 # If not found after all checks, return the original value if no validation list,
-                 # or prepare for validation failure if a list is provided.
-                 standardized_name = state_str # Keep original if truly unknown
-
-    if not standardized_name: # Should not happen if state_str was not empty initially, but as a safeguard
+    if not standardized_name:
         return default_return
 
-    # Validate against the provided list if one is given
-    if valid_states_list is not None:
-        if standardized_name not in valid_states_list:
-            # Try a case-insensitive check against valid_states_list as a last resort
-            found_in_list_case_insensitive = False
-            for valid_item in valid_states_list:
-                if standardized_name.lower() == valid_item.lower():
-                    standardized_name = valid_item # Correct casing from valid_states_list
-                    found_in_list_case_insensitive = True
-                    break
-            if not found_in_list_case_insensitive:
-                return default_return
-    
+    if valid_states_list is not None and standardized_name not in valid_states_list:
+        match = _case_insensitive_lookup(standardized_name, valid_states_list)
+        return match if match else default_return
+
     return standardized_name
 
-def map_value(value, mapping_dict, default_value, case_sensitive=False):
+def map_value(value: Any, mapping_dict: dict, default_value: Any, case_sensitive: bool = False) -> Any:
     """
     Maps an input value using a dictionary, with options for case sensitivity
     and a default return value.
@@ -137,72 +157,64 @@ def map_value(value, mapping_dict, default_value, case_sensitive=False):
 
     return default_value
 
-def standardize_country_code(country):
+def standardize_country_code(country: str | None) -> str:
     """
     Standardizes country codes to ensure they match the required format in XSD.
     Handles various forms of country codes including "US", "USA", etc.
-    
+
     Args:
         country: Country name or code
-        
+
     Returns:
         Standardized country name
     """
-    if not country or str(country).strip() == "" or str(country).lower() == "nan":
-        return "United States"  # Default to United States if empty
-    
-    country_str = str(country).strip()
-    
-    # Convert to uppercase for consistent comparison
-    country_upper = country_str.upper()
-    
-    # Hard-coded conversion for US variants with case-insensitive matching
-    us_variants = ["US", "USA", "U.S.", "U.S.A.", "UNITED STATES"]
-    if country_upper in us_variants:
-        return "United States"
-        
-    # Common variations to standardize (case-insensitive)
+    if is_empty(country):
+        return UNITED_STATES  # Default to United States if empty
+
+    country_upper = str(country).strip().upper()
+
     country_map = {
-        "USA": "United States",
-        "U.S.": "United States",
-        "U.S.A.": "United States",
-        "UNITED STATES OF AMERICA": "United States",
-        "AMERICA": "United States",
+        "US": UNITED_STATES,
+        "USA": UNITED_STATES,
+        "U.S.": UNITED_STATES,
+        "U.S.A.": UNITED_STATES,
+        "UNITED STATES": UNITED_STATES,
+        "UNITED STATES OF AMERICA": UNITED_STATES,
+        "AMERICA": UNITED_STATES,
         "CA": "Canada",
         "CAN": "Canada",
         "MX": "Mexico",
         "MEX": "Mexico",
-        "UK": "United Kingdom",
-        "GB": "United Kingdom",
-        "GBR": "United Kingdom",
-        "GREAT BRITAIN": "United Kingdom",
-        "ENGLAND": "United Kingdom"
+        "UK": UNITED_KINGDOM,
+        "GB": UNITED_KINGDOM,
+        "GBR": UNITED_KINGDOM,
+        "GREAT BRITAIN": UNITED_KINGDOM,
+        "ENGLAND": UNITED_KINGDOM,
     }
-    
-    # Try exact match first (case-insensitive)
-    for code, name in country_map.items():
-        if country_upper == code:
-            return name
-    
-    # If we couldn't match it, return the original value
-    return country_str
 
-def clean_phone_number(phone):
+    return country_map.get(country_upper, str(country).strip())
+
+def clean_phone_number(phone: str | None) -> str:
     """
-    Removes all non-numeric characters from a phone number.
+    Removes all non-numeric characters from a phone number and normalizes to 10 digits.
+    Strips leading country code '1' from 11-digit numbers.
     Returns empty string if phone is None or empty.
-    
+
     Examples:
         "(123) 456-7890" -> "1234567890"
         "123.456.7890" -> "1234567890"
-        "+1 (123) 456-7890" -> "11234567890"
+        "+1 (123) 456-7890" -> "1234567890"
     """
-    if not phone or str(phone).strip() == "" or str(phone).lower() == "nan":
+    if is_empty(phone):
         return ""
-        
-    return ''.join(char for char in str(phone) if char.isdigit())
 
-def format_date(date_str, input_formats=None, default_return=""):
+    digits = ''.join(char for char in str(phone) if char.isdigit())
+    # Strip leading US country code
+    if len(digits) == PHONE_WITH_COUNTRY_CODE_DIGITS and digits.startswith('1'):
+        digits = digits[1:]
+    return digits[:PHONE_NUMBER_DIGITS]
+
+def format_date(date_str: str | None, input_formats: list[str] | None = None, default_return: str = "") -> str:
     """
     Converts date from various formats to YYYY-MM-DD format.
     Returns default_return if date_str is empty, None, or cannot be parsed.
@@ -213,64 +225,27 @@ def format_date(date_str, input_formats=None, default_return=""):
                        If None, uses a default list.
         default_return: Value to return if parsing fails or input is empty.
     """
-    if not date_str or str(date_str).strip() == "" or str(date_str).lower() == "nan":
+    if is_empty(date_str):
         return default_return
 
     date_str = str(date_str).strip()
 
     if input_formats is None or not input_formats:
-        # Default list of formats, similar to what was in classDataConverter.py
-        # and data_cleaning.py (implicitly)
-        input_formats = [
-            '%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', 
-            '%m/%d/%y', '%d-%m-%Y', # Added %d-%m-%Y from classDataConverter
-            # The following are variations to catch common cases if year is 2 digits
-            '%Y/%m/%d', '%y/%m/%d', 
-            '%m-%d-%y', 
-        ]
+        input_formats = DEFAULT_DATE_FORMATS
 
     for fmt in input_formats:
         try:
-            # Handle cases like 'YYYY-M-D' by first parsing and then reformatting
             dt_object = datetime.strptime(date_str, fmt)
-            return dt_object.strftime('%Y-%m-%d')
+            result = dt_object.strftime('%Y-%m-%d')
+            _logger.debug("Parsed date '%s' with format '%s' -> '%s'", date_str, fmt, result)
+            return result
         except ValueError:
             continue
-    
-    # If direct parsing fails, try to handle YYYY-MM-DD with potentially single-digit month/day
-    # This was partially handled by regex before, now using strptime flexibility
-    # and ensuring output is zero-padded.
-    if re.match(r'\d{4}-\d{1,2}-\d{1,2}', date_str):
-        try:
-            # This will parse 'YYYY-M-D' and similar
-            dt_object = datetime.strptime(date_str, '%Y-%m-%d') 
-            return dt_object.strftime('%Y-%m-%d')
-        except ValueError:
-            pass # If it fails here, it's truly unparseable by this specific pattern
 
+    _logger.debug("Failed to parse date '%s' with any known format", date_str)
     return default_return
 
-def validate_counseling_date(date_str):
-    """
-    Validates that the counseling date is not before MIN_COUNSELING_DATE.
-    
-    Args:
-        date_str: A date string in YYYY-MM-DD format
-        
-    Returns:
-        Boolean indicating if the date is valid
-    """
-    if not date_str:
-        return True
-    
-    try:
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        min_date = datetime.strptime(CounselingConfig.MIN_COUNSELING_DATE, "%Y-%m-%d")
-        return date_obj >= min_date
-    except ValueError:
-        return False
-
-def clean_whitespace(text):
+def clean_whitespace(text: str | None) -> str:
     """
     Cleans excess whitespace from text while preserving normal spacing between words and sentences.
     - Replaces multiple spaces with a single space
@@ -278,7 +253,7 @@ def clean_whitespace(text):
     - Preserves single newlines but removes extras
     - Handles Salesforce-specific patterns
     """
-    if not text or str(text).strip() == "" or str(text).lower() == "nan":
+    if is_empty(text):
         return ""
         
     # Convert to string explicitly
@@ -301,70 +276,77 @@ def clean_whitespace(text):
     # Join with single newlines
     return '\n'.join(cleaned_lines)
 
-def map_gender_to_sex(gender_value):
+def map_gender_to_sex(gender_value: str | None) -> str:
     """
     Maps various gender values to just 'Female' or 'Male' per XSD requirements.
     Returns empty string if no match or missing.
     """
-    if not gender_value or str(gender_value).strip() == "" or str(gender_value).lower() == "nan":
+    if is_empty(gender_value):
         return ""
     
     gender_str = str(gender_value).lower()
     
     if "female" in gender_str:
         return "Female"
-    elif "male" in gender_str and not "female" in gender_str:  # Handle edge case for "Female" containing "male"
+    elif "male" in gender_str and "female" not in gender_str:  # Handle edge case for "Female" containing "male"
         return "Male"
     
     # Return empty string for any other values like "Non-binary", "Prefer not to say", etc.
     return ""
 
-def split_multi_value(value, delimiter=";"):
+def split_multi_value(value: str | None, delimiter: str = ";") -> list[str]:
     """
     Splits multi-value fields with the specified delimiter.
     Returns an empty list if the value is empty or None.
     """
-    if not value or str(value).strip() == "" or str(value).lower() == "nan":
+    if is_empty(value):
         return []
     
     return [item.strip() for item in str(value).split(delimiter) if item.strip()]
 
-def clean_numeric(value):
+def clean_numeric(value: str | int | float | None) -> str:
     """
-    Cleans numeric values to ensure they're valid.
-    Returns empty string if invalid or None.
+    Cleans a numeric string by removing commas, currency symbols, and whitespace.
+    Extracts digits and optional decimal point.
     """
-    if not value or str(value).strip() == "" or str(value).lower() == "nan":
+    if is_empty(value):
         return ""
     
+    cleaned_str = str(value).replace(" ", "").replace("$", "").replace(",", "")
+
     try:
-        # Try to convert to float and then string (removes redundant .0)
-        float_val = float(value)
-        # If it's a whole number, return it as an integer
+        float_val = float(cleaned_str)
         if float_val.is_integer():
             return str(int(float_val))
-        # Otherwise return as float
         return str(float_val)
     except (ValueError, TypeError):
         return ""
 
-def clean_percentage(value):
+def clean_percentage(value: str | int | float | None) -> str:
     """
-    Cleans percentage values ensuring they're valid.
+    Cleans a percentage string, removing the % symbol and converting to a decimal.
     Returns a number between 0 and 100.
     """
-    if not value or str(value).strip() == "" or str(value).lower() == "nan":
+    if is_empty(value):
         return "0"
     
+    value_str = str(value).strip()
+    if value_str.endswith('%'):
+        value_str = value_str[:-1].strip()
+
     try:
-        float_val = float(value)
+        float_val = float(value_str)
         # Ensure it's between 0 and 100
-        float_val = max(0, min(100, float_val))
+        float_val = float(max(PERCENTAGE_MIN, min(PERCENTAGE_MAX, float_val)))
+
+        if float_val.is_integer():
+            return str(int(float_val))
+
         return str(float_val)
     except (ValueError, TypeError):
-        raise ValueError(f"Invalid percentage value: {value}")
+        return "0"
 
-def truncate_counselor_notes(notes, max_length=CounselingConfig.MAX_FIELD_LENGTHS["CounselorNotes"]):
+def truncate_counselor_notes(notes: str | None, max_length: int = CounselingConfig.MAX_FIELD_LENGTHS["CounselorNotes"]) -> str:
     """
     Cleans counselor notes and ensures they don't exceed the maximum length.
     If notes exceed max_length, they are truncated at a sentence or word boundary.

@@ -1,19 +1,49 @@
+from __future__ import annotations
+
 """
 Data validation module for CSV to XML conversion.
 This module contains functions for validating data before XML conversion.
 """
 
+from datetime import datetime
+
+from typing import TYPE_CHECKING
+
 from .data_cleaning import (
-    clean_phone_number, format_date, validate_counseling_date,
-    clean_percentage, standardize_country_code, standardize_state_name
+    clean_phone_number, format_date,
+    standardize_country_code, standardize_state_name
 )
 from .config import ValidationCategory as VC, CounselingConfig, TrainingConfig
+
+if TYPE_CHECKING:
+    from .validation_report import ValidationTracker
+
+
+def validate_counseling_date(date_str: str) -> bool:
+    """
+    Validates that the counseling date is not before MIN_COUNSELING_DATE.
+
+    Args:
+        date_str: A date string in YYYY-MM-DD format
+
+    Returns:
+        Boolean indicating if the date is valid
+    """
+    if not date_str:
+        return True
+
+    try:
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        min_date = datetime.strptime(CounselingConfig.MIN_COUNSELING_DATE, "%Y-%m-%d")
+        return date_obj >= min_date
+    except ValueError:
+        return False
 
 # =============================================================================
 # COUNSELING-SPECIFIC VALIDATION
 # =============================================================================
 
-def validate_counseling_record(row, row_index, validator):
+def validate_counseling_record(row: dict[str, str], row_index: int, validator: ValidationTracker) -> bool:
     """
     Validates a single record for the Counseling converter.
     """
@@ -43,7 +73,7 @@ def validate_counseling_record(row, row_index, validator):
 # TRAINING-SPECIFIC VALIDATION
 # =============================================================================
 
-def validate_training_record(row, row_index, validator):
+def validate_training_record(row: dict[str, str], row_index: int, validator: ValidationTracker) -> bool:
     """
     Validates a single record for the Training converter.
     For training data, the main validation is ensuring the event ID exists.
@@ -63,7 +93,7 @@ def validate_training_record(row, row_index, validator):
 # ANALYSIS FUNCTIONS (for --analyze-only mode)
 # =============================================================================
 
-def analyze_counseling_csv(csv_rows):
+def analyze_counseling_csv(csv_rows: list[dict[str, str]]) -> dict[str, int]:
     """
     Analyzes CSV data from a counseling report for potential issues.
     """
@@ -82,7 +112,7 @@ def analyze_counseling_csv(csv_rows):
             analysis['invalid_dates'] += 1
     return analysis
 
-def analyze_training_csv(csv_rows):
+def analyze_training_csv(csv_rows: list[dict[str, str]]) -> dict[str, int]:
     """
     Analyzes CSV data from a training report for potential issues.
     """

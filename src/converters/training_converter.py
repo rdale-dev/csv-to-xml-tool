@@ -2,15 +2,15 @@
 Handles the conversion of SBA Management Training Reports from CSV to XML.
 """
 
+from .. import data_validation
 import pandas as pd
-import xml.dom.minidom as md
-from xml.etree.ElementTree import Element, tostring
+import xml.etree.ElementTree as ET
 import re
 
 from .base_converter import BaseConverter
 from ..config import TrainingConfig, GeneralConfig, ValidationCategory
 from .. import data_cleaning
-from ..xml_utils import create_element, escape_xml
+from ..xml_utils import create_element
 
 class TrainingConverter(BaseConverter):
     """
@@ -34,13 +34,12 @@ class TrainingConverter(BaseConverter):
                 return str(record[col])
         return default
 
-    def convert(self, input_path: str, output_path: str):
-        self.logger.info(f"Starting conversion of training data: {input_path}")
-
+    def _read_and_validate_csv(self, input_path):
+        """Read CSV, validate columns and rows. Returns (event_groups, event_id_col) or (None, None)."""
         try:
             df = pd.read_csv(input_path)
             self.logger.info(f"Successfully read CSV with {len(df)} records.")
-        except Exception as e:
+        except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError) as e:
             self.logger.error(f"Failed to read CSV file: {e}")
             self.validator.add_issue("file", "error", ValidationCategory.FILE_ACCESS, "input_file", f"Failed to read CSV file: {e}")
             raise
@@ -49,89 +48,109 @@ class TrainingConverter(BaseConverter):
         if not event_id_col or event_id_col not in df.columns:
             self.logger.error(f"Required column '{event_id_col}' not found in the CSV.")
             self.validator.add_issue("file", "error", ValidationCategory.MISSING_REQUIRED, event_id_col, "Event ID column is missing.")
-            return
+            return None, None
 
-        # Pre-validate all rows to ensure they have an event ID
-        valid_rows = []
-        for index, row in df.iterrows():
-            if data_validation.validate_training_record(row, index, self.validator):
-                valid_rows.append(row)
-
+        valid_rows = [row for index, row in df.iterrows() if data_validation.validate_training_record(row, index, self.validator)]
         if not valid_rows:
             self.logger.error("No valid rows found in the CSV to process.")
-            return
+            return None, None
 
         df_valid = pd.DataFrame(valid_rows)
         event_groups = df_valid.groupby(event_id_col)
         self.logger.info(f"Found {len(event_groups)} unique training events.")
+        return event_groups, event_id_col
 
-        root = Element('ManagementTrainingReport')
+    def _write_xml_output(self, root, output_path):
+        """Format and write XML tree to output file."""
+        tree = ET.ElementTree(root)
+        ET.indent(tree, space="  ")
+        tree.write(output_path, encoding='utf-8', xml_declaration=True)
+        self.logger.info(f"XML file successfully created at {output_path}")
+
+    def _build_training_record(self, root, event_id, group_df):
+        """Build a single ManagementTrainingRecord element."""
+        first_record = group_df.iloc[0]
+        self.validator.set_current_record_id(str(event_id))
+
+        record = create_element(root, 'ManagementTrainingRecord')
+        create_element(record, 'PartnerTrainingNumber', str(event_id))
+
+        funding_source = self._get_column_value(first_record, 'funding_source')
+        if funding_source:
+            create_element(record, 'FundingSource', funding_source)
+
+        location = create_element(record, 'Location')
+        create_element(location, 'LocationCode', self.general_config.DEFAULT_LOCATION_CODE)
+
+        date_val = self._get_column_value(first_record, "start_date")
+        formatted_date = data_cleaning.format_date(date_val, self.config.DATE_INPUT_FORMATS, self.config.DEFAULT_START_DATE)
+        create_element(record, 'DateTrainingStarted', formatted_date)
+
+        create_element(record, 'NumberOfSessions', self.config.DEFAULT_TRAINING_SESSIONS)
+        create_element(record, 'TotalTrainingHours', self.config.DEFAULT_TRAINING_HOURS)
+
+        title_val = self._get_column_value(first_record, "event_name")
+        if not title_val:
+            title_val = f"{self.config.DEFAULT_TRAINING_EVENT_TITLE_PREFIX}{event_id}"
+        create_element(record, 'TrainingTitle', title_val)
+
+        self._build_location_section(record, first_record)
+        demographics = self._calculate_demographics(group_df)
+        self._build_demographics_section(record, demographics)
+
+        topic_val = self._get_column_value(first_record, "training_topic")
+        mapped_topic = data_cleaning.map_value(topic_val, self.config.TRAINING_TOPIC_MAPPINGS, self.config.DEFAULT_TRAINING_TOPIC, False)
+        training_topic_element = create_element(record, 'TrainingTopic')
+        create_element(training_topic_element, 'Code', mapped_topic)
+
+        partners_element = create_element(record, 'TrainingPartners')
+        create_element(partners_element, 'Code', self.config.DEFAULT_TRAINING_PARTNER_CODE)
+
+        format_val = self._get_column_value(first_record, "event_type")
+        program_format_text = data_cleaning.map_value(format_val, self.config.PROGRAM_FORMAT_MAPPINGS, self.config.DEFAULT_PROGRAM_FORMAT, False)
+        create_element(record, 'ProgramFormatType', program_format_text)
+
+        create_element(record, 'DollarAmountOfFees', self.config.DEFAULT_TRAINING_FEES)
+        language_element = create_element(record, 'Language')
+        create_element(language_element, 'Code', self.general_config.DEFAULT_LANGUAGE)
+
+        cosponsor_name = self._get_column_value(first_record, "cosponsor")
+        if cosponsor_name and cosponsor_name.lower() != 'n/a':
+            create_element(record, 'CosponsorsName', cosponsor_name)
+
+    def convert(self, input_path: str, output_path: str):
+        self.logger.info(f"Starting conversion of training data: {input_path}")
+
+        event_groups, event_id_col = self._read_and_validate_csv(input_path)
+        if event_groups is None:
+            return
+
+        root = ET.Element('ManagementTrainingReport')
         root.set('xmlns:xsi', 'http://www.w3.org/2001/XMLSchema-instance')
 
-        for event_id, group_df in event_groups:
+        # Training converter aggregates per event, so "progress" is
+        # measured in event groups rather than CSV rows. Call the
+        # callback every N groups so the web progress bar advances.
+        total_events = len(event_groups)
+        self._report_progress(0, total_events)
+
+        for i, (event_id, group_df) in enumerate(event_groups, 1):
             if group_df.empty:
+                self._maybe_report_progress(i, total_events, every=5)
                 continue
-
-            first_record = group_df.iloc[0]
-            self.validator.set_current_record_id(str(event_id))
-
             try:
-                record = create_element(root, 'ManagementTrainingRecord')
-
-                create_element(record, 'PartnerTrainingNumber', str(event_id))
-                location = create_element(record, 'Location')
-                create_element(location, 'LocationCode', self.general_config.DEFAULT_LOCATION_CODE)
-
-                date_val = self._get_column_value(first_record, "start_date")
-                formatted_date = data_cleaning.format_date(date_val, self.config.DATE_INPUT_FORMATS, self.config.DEFAULT_START_DATE)
-                create_element(record, 'DateTrainingStarted', formatted_date)
-
-                create_element(record, 'NumberOfSessions', self.config.DEFAULT_TRAINING_SESSIONS)
-                create_element(record, 'TotalTrainingHours', self.config.DEFAULT_TRAINING_HOURS)
-
-                title_val = self._get_column_value(first_record, "event_name")
-                if not title_val:
-                    title_val = f"{self.config.DEFAULT_TRAINING_EVENT_TITLE_PREFIX}{event_id}"
-                create_element(record, 'TrainingTitle', escape_xml(title_val))
-
-                self._build_location_section(record, first_record)
-                demographics = self._calculate_demographics(group_df)
-                self._build_demographics_section(record, demographics)
-
-                topic_val = self._get_column_value(first_record, "training_topic")
-                mapped_topic = data_cleaning.map_value(topic_val, self.config.TRAINING_TOPIC_MAPPINGS, self.config.DEFAULT_TRAINING_TOPIC, False)
-                training_topic_element = create_element(record, 'TrainingTopic')
-                create_element(training_topic_element, 'Code', mapped_topic)
-
-                partners_element = create_element(record, 'TrainingPartners')
-                create_element(partners_element, 'Code', self.config.DEFAULT_TRAINING_PARTNER_CODE)
-
-                format_val = self._get_column_value(first_record, "event_type")
-                program_format_text = data_cleaning.map_value(format_val, self.config.PROGRAM_FORMAT_MAPPINGS, self.config.DEFAULT_PROGRAM_FORMAT, False)
-                create_element(record, 'ProgramFormatType', program_format_text)
-
-                create_element(record, 'DollarAmountOfFees', self.config.DEFAULT_TRAINING_FEES)
-                language_element = create_element(record, 'Language')
-                create_element(language_element, 'Code', self.general_config.DEFAULT_LANGUAGE)
-
-                cosponsor_name = self._get_column_value(first_record, "cosponsor")
-                if cosponsor_name and cosponsor_name.lower() != 'n/a':
-                    create_element(record, 'CosponsorsName', escape_xml(cosponsor_name))
-
+                self._build_training_record(root, event_id, group_df)
                 self.validator.record_processed(success=True)
-
-            except Exception as e:
+            except (ValueError, KeyError, AttributeError) as e:
                 self.logger.error(f"Error processing event {event_id}: {e}", exc_info=True)
-                self.validator.add_issue(str(event_id), "error", ValidationCategory.PROCESSING_ERROR, "record", f"Unhandled error: {e}")
+                self.validator.add_issue(str(event_id), "error", ValidationCategory.PROCESSING_ERROR, "record", f"Error processing event: {e}")
                 self.validator.record_processed(success=False)
 
-        rough_string = tostring(root, 'utf-8')
-        reparsed = md.parseString(rough_string)
-        pretty_xml = '\n'.join([line for line in reparsed.toprettyxml(indent="  ").split('\n') if line.strip()])
+            self._maybe_report_progress(i, total_events, every=5)
 
-        with open(output_path, 'w') as f:
-            f.write(pretty_xml)
-        self.logger.info(f"XML file successfully created at {output_path}")
+        self._report_progress(total_events, total_events)
+
+        self._write_xml_output(root, output_path)
 
     def _build_location_section(self, parent, record):
         training_location = create_element(parent, 'TrainingLocation')
@@ -149,52 +168,59 @@ class TrainingConverter(BaseConverter):
             state = self.config.DEFAULT_LOCATION['state']
             zip_code = self.config.DEFAULT_LOCATION['zip']
 
-        create_element(training_location, 'City', escape_xml(city))
+        create_element(training_location, 'City', city)
         create_element(training_location, 'State', data_cleaning.standardize_state_name(state))
-        create_element(training_location, 'ZipCode', escape_xml(zip_code))
+        create_element(training_location, 'ZipCode', zip_code)
         country_element = create_element(training_location, 'Country')
         create_element(country_element, 'Code', self.config.DEFAULT_LOCATION['country'])
+
+    def _resolve_column(self, df, column_key):
+        """Resolve a config column key to the actual DataFrame column name."""
+        possible = self.config.COLUMN_MAPPING.get(column_key, [])
+        if isinstance(possible, str):
+            possible = [possible]
+        return next((c for c in possible if c in df.columns), None)
+
+    def _count_matches(self, df, column_key, keywords):
+        """Count rows matching any keyword in the specified column."""
+        column_name = self._resolve_column(df, column_key)
+        if not column_name:
+            return 0
+        pattern = '|'.join(keywords)
+        return sum(df[column_name].fillna('').astype(str).str.lower().str.contains(pattern))
 
     def _calculate_demographics(self, df):
         demographics = {}
         total = len(df)
         demographics['total'] = max(total, 2) # XSD minimum
 
-        # Helper to count matches for a given set of keywords in a specified column
-        def count_matches(column_key, keywords_map):
-            column_name = self._get_column_value(df.iloc[0], column_key)
-            if not column_name or column_name not in df.columns:
-                return 0
-
-            pattern = '|'.join(keywords_map)
-            return sum(df[column_name].fillna('').astype(str).str.lower().str.contains(pattern))
-
         # Business Status
-        business_status_col = self._get_column_value(df.iloc[0], 'business_status')
-        if business_status_col and business_status_col in df.columns:
+        business_status_col = self._resolve_column(df, 'business_status')
+        if business_status_col:
             currently_in_business = sum(df[business_status_col].fillna('').astype(str).str.lower().str.contains('yes|true|1|y'))
             demographics['currently_in_business'] = currently_in_business
             demographics['not_in_business'] = total - currently_in_business
 
         # Gender, Disability, Military
-        demographics['female'] = count_matches('gender', self.config.DEMOGRAPHIC_KEYWORDS['gender']['female'])
-        demographics['male'] = count_matches('gender', self.config.DEMOGRAPHIC_KEYWORDS['gender']['male'])
-        demographics['disabilities'] = count_matches('disability', ['yes', 'true', '1', 'y'])
-        demographics['active_duty'] = count_matches('military_status', self.config.DEMOGRAPHIC_KEYWORDS['military']['active_duty'])
-        demographics['veterans'] = count_matches('military_status', self.config.DEMOGRAPHIC_KEYWORDS['military']['veteran'])
-        demographics['service_disabled_veterans'] = count_matches('military_status', self.config.DEMOGRAPHIC_KEYWORDS['military']['service_disabled_veteran'])
-        demographics['reserve_guard'] = count_matches('military_status', self.config.DEMOGRAPHIC_KEYWORDS['military']['reserve_guard'])
-        demographics['military_spouse'] = count_matches('military_status', self.config.DEMOGRAPHIC_KEYWORDS['military']['spouse'])
+        demographics['female'] = self._count_matches(df, 'gender', self.config.DEMOGRAPHIC_KEYWORDS['gender']['female'])
+        demographics['male'] = self._count_matches(df, 'gender', self.config.DEMOGRAPHIC_KEYWORDS['gender']['male'])
+        demographics['disabilities'] = self._count_matches(df, 'disability', [r'\byes\b', r'\btrue\b', r'\b1\b', r'\by\b'])
+        demographics['active_duty'] = self._count_matches(df, 'military_status', self.config.DEMOGRAPHIC_KEYWORDS['military']['active_duty'])
+        demographics['veterans'] = self._count_matches(df, 'military_status', self.config.DEMOGRAPHIC_KEYWORDS['military']['veteran'])
+        demographics['service_disabled_veterans'] = self._count_matches(df, 'military_status', self.config.DEMOGRAPHIC_KEYWORDS['military']['service_disabled_veteran'])
+        demographics['reserve_guard'] = self._count_matches(df, 'military_status', self.config.DEMOGRAPHIC_KEYWORDS['military']['reserve_guard'])
+        demographics['military_spouse'] = self._count_matches(df, 'military_status', self.config.DEMOGRAPHIC_KEYWORDS['military']['spouse'])
 
         # Race
-        demographics['race'] = {key: count_matches('race', keywords) for key, keywords in self.config.DEMOGRAPHIC_KEYWORDS['race'].items()}
+        demographics['race'] = {key: self._count_matches(df, 'race', keywords) for key, keywords in self.config.DEMOGRAPHIC_KEYWORDS['race'].items()}
 
         # Ethnicity
-        hispanic_count = count_matches('ethnicity', self.config.DEMOGRAPHIC_KEYWORDS['ethnicity']['hispanic'])
-        ethnicity_col_name = self._get_column_value(df.iloc[0], 'ethnicity')
+        hispanic_count = self._count_matches(df, 'ethnicity', self.config.DEMOGRAPHIC_KEYWORDS['ethnicity']['hispanic'])
+        ethnicity_col_name = self._resolve_column(df, 'ethnicity')
         non_hispanic_count = 0
-        if ethnicity_col_name and ethnicity_col_name in df.columns:
-            non_hispanic_mask = (~df[ethnicity_col_name].fillna('').astype(str).str.lower().str.contains('hispanic|latino')) & (df[ethnicity_col_name] != '')
+        if ethnicity_col_name:
+            ethnicity_lower = df[ethnicity_col_name].fillna('').astype(str).str.lower()
+            non_hispanic_mask = (~ethnicity_lower.str.contains('hispanic|latino')) & (df[ethnicity_col_name] != '') & (~ethnicity_lower.str.contains('prefer not'))
             non_hispanic_count = sum(non_hispanic_mask)
         demographics['ethnicity'] = {'hispanic': hispanic_count, 'non_hispanic': non_hispanic_count}
 
